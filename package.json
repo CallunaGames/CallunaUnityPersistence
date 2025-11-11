@@ -1,0 +1,27 @@
+{
+  "name": "com.calluna.template",
+  "version": "1.0.0",
+  "displayName": "Calluna Unity Package Template",
+  "description": "Package Description",
+  "unity": "6000.33",
+  "unityRelease": "",
+  "documentationUrl": "https://github.com/CallunaGames/CallunaUnityTemplate",
+  "changelogUrl": "https://github.com/CallunaGames/CallunaUnityTemplate/commits/v1.0.0",
+  "licensesUrl": "",
+  "dependencies": {
+  },
+  "samples": [
+    {
+      "displayName": "Sample Name",
+      "description": "Sample Description",
+      "path": "Samples~/Sample1"
+    }
+  ],
+  "keywords": [
+  ],
+  "author": {
+    "name": "Calluna Games",
+    "email": "callunagames.temp@gmail.com",
+    "url": ""
+  }
+}
