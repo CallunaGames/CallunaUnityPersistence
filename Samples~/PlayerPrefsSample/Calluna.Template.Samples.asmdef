@@ -1,8 +1,9 @@
 {
-    "name": "Calluna.Template.Samples.Sample1",
-    "rootNamespace": "Calluna.Template.Samples",
+    "name": "Calluna.Persistence.Samples.PlayerPrefsSample",
+    "rootNamespace": "Calluna.Persistence.PlayerPrefsSample",
     "references": [
-        "GUID:6e11b6063e739f6468948dab11caf494"
+        "GUID:6e11b6063e739f6468948dab11caf494",
+        "GUID:a4e2fcc097ca52d46a2cc62ef3c5e9bf"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

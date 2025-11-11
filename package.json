@@ -9,12 +9,15 @@
   "changelogUrl": "https://github.com/CallunaGames/CallunaUnityPersistence/commits/v1.0.0",
   "licensesUrl": "",
   "dependencies": {
+    "com.calluna.core": "https://github.com/CallunaGames/CallunaUnityCore.git#v1.0.4",
+    "com.calluna.di": "https://github.com/CallunaGames/CallunaUnityDI.git#v1.0.1",
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
   },
   "samples": [
     {
-      "displayName": "Sample Name",
-      "description": "Sample Description",
-      "path": "Samples~/Sample1"
+      "displayName": "Player Prefs Sample",
+      "description": "Sample for saving and loading data using player prefs",
+      "path": "Samples~/PlayerPrefsSample"
     }
   ],
   "keywords": [
