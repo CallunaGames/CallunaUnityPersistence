@@ -18,17 +18,16 @@ namespace Calluna.Persistence
             _serializer = resolver.Resolve<JsonSerializer>();
         }
 
-        public T Load<T>(string id, T defaultValue = default(T))
+        public T Load<T>(string id, T defaultValue = default) where T : MigratableData
         {
             VersionSaveData saveData = _saveLoader.Load<VersionSaveData>(id);
 
             if (saveData == null)
                 return defaultValue;
 
-            Type type = typeof(T);
-            if (!_dataMigrators.TryGetValue(id, out DataMigrator migrator))
+            if (!_dataMigrators.TryGetValue(defaultValue.DataId, out DataMigrator migrator))
             {
-                throw new ArgumentException($"There is missing a data migrator for '{id}'");
+                throw new ArgumentException($"There is missing a data migrator for '{defaultValue.DataId}'");
             }
 
             string data = migrator.Migrate(saveData);
