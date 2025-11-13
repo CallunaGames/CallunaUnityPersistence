@@ -37,7 +37,7 @@ namespace Calluna.Persistence.PlayerPrefsSample
                 _resolver.Resolve<DataMigrationSteps.DataV1ToV2>(),
             };
 
-            DataMigrator dataMigrator = new DataMigrator(DataV2.Id, steps);
+            DataMigrator dataMigrator = new DataMigrator<DataV2>(steps);
             return new List<DataMigrator>() { dataMigrator };
         }
     }
