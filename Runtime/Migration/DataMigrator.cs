@@ -25,10 +25,10 @@ namespace Calluna.Persistence
             _currentVersion = hasSteps ? steps.Min(s => s.TargetVersion) : 0;
         }
 
-        public string Migrate(VersionSaveData versionSaveData)
+        public string Migrate(VersionedSaveData versionedSaveData)
         {
-            int version = versionSaveData.Version;
-            string data = versionSaveData.Data;
+            int version = versionedSaveData.Version;
+            string data = versionedSaveData.Data;
             for (int i = version; i < _currentVersion; i++)
             {
                 int migratorVersion = i + 1;

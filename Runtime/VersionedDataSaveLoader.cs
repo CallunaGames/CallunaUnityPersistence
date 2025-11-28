@@ -20,7 +20,7 @@ namespace Calluna.Persistence
 
         public T Load<T>(string id, T defaultValue = default)
         {
-            VersionSaveData saveData = _saveLoader.Load<VersionSaveData>(id);
+            VersionedSaveData saveData = _saveLoader.Load<VersionedSaveData>(id);
 
             if (saveData == null)
                 return defaultValue;
@@ -37,7 +37,7 @@ namespace Calluna.Persistence
         public void Save<T>(string id, T value, int version)
         {
             string data = _serializer.Serialize(value);
-            VersionSaveData versionedData = new VersionSaveData() { Data = data, Version = version };
+            VersionedSaveData versionedData = new VersionedSaveData() { Data = data, Version = version };
             _saveLoader.Save(id, versionedData);
         }
 

@@ -52,6 +52,11 @@ namespace Calluna.Persistence
             PlayerPrefs.Save();
         }
 
+        public void Delete(string id)
+        {
+            PlayerPrefs.DeleteKey(id);
+        }
+
         public void Clear()
         {
             PlayerPrefs.DeleteAll();

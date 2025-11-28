@@ -1,8 +1,6 @@
-using UnityEngine;
-
 namespace Calluna.Persistence
 {
-    public class VersionSaveData
+    public class VersionedSaveData
     {
         public int Version;
         public string Data;
