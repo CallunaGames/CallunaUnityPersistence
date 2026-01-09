@@ -54,6 +54,7 @@ namespace Calluna.Persistence
         {
             _textFileReadWriter.Delete(_path);
             _persistedData = null;
+            OnClear?.Invoke();
         }
 
         private Dictionary<string, string> ReadOrCreateData()

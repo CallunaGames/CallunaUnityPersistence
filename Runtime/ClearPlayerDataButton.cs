@@ -5,7 +5,7 @@ using UnityEngine.UI;
 
 namespace Calluna.Persistence
 {
-    public class ClearPlayerPrefsButton : MonoBehaviour, Injectable
+    public class ClearPlayerDataButton : MonoBehaviour, Injectable
     {
         [SerializeField] private Button _button;
 
