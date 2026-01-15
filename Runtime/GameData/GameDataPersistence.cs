@@ -2,11 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Calluna.DI;
+using UnityEngine;
 
 namespace Calluna.Persistence
 {
-    public class GameDataPersistence : Injectable
+    public class GameDataPersistence : Injectable, Initializable
     {
+        public ReadonlyObservable<bool> LoadingFailed => _loadFailed;
+        
         private Dictionary<string, DataSaveLoader> _saveLoaders = new Dictionary<string, DataSaveLoader>();
         private Dictionary<string, string> _loadedData = new Dictionary<string, string>();
 
@@ -14,7 +17,13 @@ namespace Calluna.Persistence
         private SaveLoader _saveLoader;
         private IOrderedEnumerable<GameDataMigrator> _migrators;
         private int _currentVersion = 0;
-
+        private readonly Observable<bool> _loadFailed = false;
+        
+        void Initializable.Initialize()
+        {
+            _loadFailed.Value = false;
+        }
+        
         void Injectable.Inject(Resolver resolver)
         {
             _arguments = resolver.Resolve<Arguments>();
@@ -26,20 +35,46 @@ namespace Calluna.Persistence
         /// </summary>
         public void Load()
         {
-            InitMigrators();
+            try
+            {
+                InitMigrators();
             
-            GameData data = _saveLoader.Load(_arguments.GameDataId, CreateDefaultGameData());
-            _loadedData = data.Data.ToDictionary(d => d.Id, d => d.Data);
-            MigrateData(_loadedData, data.Version);
+                GameData data = _saveLoader.Load(_arguments.GameDataId, CreateDefaultGameData());
+                _loadedData = data.Data.ToDictionary(d => d.Id, d => d.Data);
+                MigrateData(_loadedData, data.Version);
 
-            _saveLoaders = _arguments.SaveLoaders.ToDictionary(s => s.DataId);
-            LoadDataSaveLoaders();
+                _saveLoaders = _arguments.SaveLoaders.ToDictionary(s => s.DataId);
+                LoadDataSaveLoaders();
+            }
+            catch (Exception e)
+            {
+                _loadFailed.Value = true;
+                Debug.LogError("Failed to load the game data");
+                Debug.LogException(e);
+            }
         }
 
         /// <summary>
         /// Saves the game data by collecting data from all provided DataSaveLoaders using the highest version of the data migrators
         /// </summary>
-        public void Save() => SaveGameData(CollectSaveData(), _currentVersion);
+        public void Save()
+        {
+            if (_loadFailed.Value)
+            {
+                Debug.LogError("Save was aborted since loading of the GameData failed initially");
+                return;
+            }
+            
+            try
+            {
+                SaveGameData(CollectSaveData(), _currentVersion);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("Failed to save the game data");
+                Debug.LogException(e);
+            }
+        }
         
         /// <summary>
         /// Saves game data with custom data dictionary and version. Use with caution!
@@ -47,14 +82,6 @@ namespace Calluna.Persistence
         /// <param name="data">The serialized key value pairs (Data Id, Serialized Data)</param>
         /// <param name="version">The custom version of this save data</param>
         public void OverrideSave(Dictionary<string, string> data, int version) => SaveGameData(data, version);
-
-        private void TryLoadData(DataSaveLoader saveLoader)
-        {
-            if (_loadedData.TryGetValue(saveLoader.DataId, out string serializedData))
-                saveLoader.Load(serializedData);
-            else
-                saveLoader.LoadDefault();
-        }
 
         private void InitMigrators()
         {
@@ -86,6 +113,14 @@ namespace Calluna.Persistence
             {
                 TryLoadData(saveLoader);
             }
+        }
+
+        private void TryLoadData(DataSaveLoader saveLoader)
+        {
+            if (_loadedData.TryGetValue(saveLoader.DataId, out string serializedData))
+                saveLoader.Load(serializedData);
+            else
+                saveLoader.LoadDefault();
         }
 
         private Dictionary<string, string> CollectSaveData()

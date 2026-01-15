@@ -1,12 +1,12 @@
 {
   "name": "com.calluna.persistence",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "displayName": "Calluna Unity Persistence",
   "description": "Handles serialization, versioning, saving and loading of data",
   "unity": "6000.33",
   "unityRelease": "",
   "documentationUrl": "https://github.com/CallunaGames/CallunaUnityPersistence",
-  "changelogUrl": "https://github.com/CallunaGames/CallunaUnityPersistence/compare/v1.1.2...v1.1.3",
+  "changelogUrl": "https://github.com/CallunaGames/CallunaUnityPersistence/compare/v1.1.3...v1.1.4",
   "licensesUrl": "",
   "dependencies": {
     "com.calluna.core": "https://github.com/CallunaGames/CallunaUnityCore.git#v1.0.4",
@@ -28,6 +28,11 @@
       "displayName": "Persistent Data Path Sample",
       "description": "Sample for saving and loading data using the persistent data path",
       "path": "Samples~/PersistentDataPathSample"
+    },
+    {
+      "displayName": "Failed Game Data Loading Sample",
+      "description": "Sample for showing how the packages handles the failure of game data loading",
+      "path": "Samples~/FailedGameDataLoadingSample"
     }
   ],
   "keywords": [
