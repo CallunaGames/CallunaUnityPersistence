@@ -18,6 +18,9 @@ namespace Calluna.Persistence
         private IOrderedEnumerable<GameDataMigrator> _migrators;
         private int _currentVersion = 0;
         private readonly Observable<bool> _loadFailed = false;
+
+        private Dictionary<string, string> _collectedData;
+        private GameData _gameData;
         
         void Initializable.Initialize()
         {
@@ -39,9 +42,9 @@ namespace Calluna.Persistence
             {
                 InitMigrators();
             
-                GameData data = _saveLoader.Load(_arguments.GameDataId, CreateDefaultGameData());
-                _loadedData = data.Data.ToDictionary(d => d.Id, d => d.Data);
-                MigrateData(_loadedData, data.Version);
+                _gameData = _saveLoader.Load(_arguments.GameDataId, CreateDefaultGameData());
+                _loadedData = _gameData.Data.ToDictionary(d => d.Id, d => d.Data);
+                MigrateData(_loadedData, _gameData.Version);
 
                 _saveLoaders = _arguments.SaveLoaders.ToDictionary(s => s.DataId);
                 LoadDataSaveLoaders();
@@ -67,7 +70,8 @@ namespace Calluna.Persistence
             
             try
             {
-                SaveGameData(CollectSaveData(), _currentVersion);
+                CollectSaveData();
+                SaveGameData(_collectedData, _currentVersion);
             }
             catch (Exception e)
             {
@@ -123,23 +127,33 @@ namespace Calluna.Persistence
                 saveLoader.LoadDefault();
         }
 
-        private Dictionary<string, string> CollectSaveData()
+        private void CollectSaveData()
         {
-            Dictionary<string, string> saveData = new Dictionary<string, string>();
+            _collectedData ??= new Dictionary<string, string>(_saveLoaders.Count);
+            _collectedData.Clear();
             foreach (DataSaveLoader saveLoader in _saveLoaders.Values)
             {
-                if (!saveData.TryAdd(saveLoader.DataId, saveLoader.GetSerializedData()))
+                if (!_collectedData.TryAdd(saveLoader.DataId, saveLoader.GetSerializedData()))
                     throw new InvalidOperationException(
                         $"Failed to save game data do to the duplicate id \"{saveLoader.DataId}\"");
             }
-            return saveData;
         }
 
         private void SaveGameData(Dictionary<string, string> data, int version)
         {
-            GameDataEntry[] entries =
-                data.Select(pair => new GameDataEntry() { Id = pair.Key, Data = pair.Value }).ToArray();
-            _saveLoader.Save(_arguments.GameDataId, new GameData() { Data = entries, Version = version });
+            _gameData ??= new GameData();
+            GameDataEntry[] entries = _gameData.Data?.Length == _collectedData.Count ? _gameData.Data : new GameDataEntry[_collectedData.Count];
+            int i = 0;
+            foreach (KeyValuePair<string, string> pair in data)
+            {
+                GameDataEntry entry = entries[i];
+                entry.Id = pair.Key;
+                entry.Data = pair.Value;
+                entries[i] = entry;
+            }
+            _gameData.Version = version;
+            _gameData.Data = entries;
+            _saveLoader.Save(_arguments.GameDataId, _gameData);
         }
 
         private void ValidateVersions(IReadOnlyList<GameDataMigrator> migrators)

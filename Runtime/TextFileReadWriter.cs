@@ -12,13 +12,43 @@ namespace Calluna.Persistence
             return File.ReadAllText(path);
         }
         
+        public string ReadText((FileStream, StreamWriter, StreamReader) streams)
+        {
+            streams.Item1.Position = 0;
+            return streams.Item3.ReadToEnd();
+        }
+        
         public bool Has(string path) => File.Exists(path);
 
-        public void WriteText(string path, string contents, bool append = false)
+        public void WriteText(string path, string contents)
         {
-            StreamWriter stream = Has(path) ? new StreamWriter(path, append) : File.CreateText(path);
-            stream.Write(contents);
-            stream.Close();
+            File.WriteAllText(path, contents);
+        }
+
+        public (FileStream, StreamWriter, StreamReader) OpenStreams(string path)
+        {
+            FileStream fileStream = new FileStream(
+                path,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.Read);
+            StreamWriter streamWriter = new StreamWriter(fileStream);
+            StreamReader streamReader = new StreamReader(fileStream);
+            return (fileStream, streamWriter, streamReader);
+        }
+
+        public void Overwrite((FileStream, StreamWriter, StreamReader) streams, string content)
+        {
+            streams.Item1.SetLength(0);
+            streams.Item1.Position = 0;
+            streams.Item2.Write(content);
+            streams.Item2.Flush(); 
+        }
+
+        public void Close((FileStream, StreamWriter, StreamReader) streams)
+        {
+            streams.Item1.Dispose();
+            Debug.Log("Streams closed");
         }
         
         public void Create(string path) => File.CreateText(path).Close();
