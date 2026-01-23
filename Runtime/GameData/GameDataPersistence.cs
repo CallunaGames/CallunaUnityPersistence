@@ -150,6 +150,7 @@ namespace Calluna.Persistence
                 entry.Id = pair.Key;
                 entry.Data = pair.Value;
                 entries[i] = entry;
+                i++;
             }
             _gameData.Version = version;
             _gameData.Data = entries;
