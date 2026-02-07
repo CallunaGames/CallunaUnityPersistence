@@ -23,7 +23,7 @@ namespace Calluna.Persistence
 
         public JToken SerializeToToken<T>(T value)
         {
-            JToken data = JObject.FromObject(value, _jsonSerializer);
+            JToken data = JToken.FromObject(value, _jsonSerializer);
             return data;
         }
 
