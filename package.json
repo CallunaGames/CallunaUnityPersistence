@@ -1,16 +1,16 @@
 {
   "name": "com.calluna.persistence",
-  "version": "1.1.6",
+  "version": "1.2.0",
   "displayName": "Calluna Unity Persistence",
   "description": "Handles serialization, versioning, saving and loading of data",
   "unity": "6000.33",
   "unityRelease": "",
   "documentationUrl": "https://github.com/CallunaGames/CallunaUnityPersistence",
-  "changelogUrl": "https://github.com/CallunaGames/CallunaUnityPersistence/compare/v1.1.5...v1.1.6",
+  "changelogUrl": "https://github.com/CallunaGames/CallunaUnityPersistence/compare/v1.1.6...v1.2.0",
   "licensesUrl": "",
   "dependencies": {
     "com.calluna.core": "https://github.com/CallunaGames/CallunaUnityCore.git#v1.0.11",
-    "com.calluna.di": "https://github.com/CallunaGames/CallunaUnityDI.git#v1.0.2",
+    "com.calluna.di": "https://github.com/CallunaGames/CallunaUnityDI.git#v1.0.3",
     "com.unity.nuget.newtonsoft-json": "3.2.1"
   },
   "samples": [

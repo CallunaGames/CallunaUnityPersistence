@@ -7,8 +7,12 @@ namespace Calluna.Persistence.Samples.GameData
     {
         public override void InstallBindings(Binder binder)
         {
-            binder.Bind<SaveLoader>().ToNew<PlayerPrefsSaveLoader>().AsSingle();
+            binder.Bind<SaveLoader>().ToNew<PersistentDataPathSaveLoader>()
+                .WithArgument(new PersistentDataPathSaveLoader.Arguments() { FileName = "GameDataTest" }).AsSingle();
             
+            binder.BindToNewSelf<TextFileReadWriter>()
+                .AsSingle();
+
             binder.BindToNewSelf<JsonSerializer>().AsSingle();
         }
     }

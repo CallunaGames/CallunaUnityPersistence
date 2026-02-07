@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Calluna.DI;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 
 namespace Calluna.Persistence.Samples.GameData
@@ -21,9 +22,9 @@ namespace Calluna.Persistence.Samples.GameData
 
         public void Clean()
         {
-            Dictionary<string, string> data = new Dictionary<string, string>();
-            data.Add(Data1.Id, _serializer.Serialize(new Data1_v0(){Value = _data1Value}));
-            data.Add(Data2.Id, _serializer.Serialize(new Data2_v0(){Foo = new Foo()
+            Dictionary<string, JToken> data = new Dictionary<string, JToken>();
+            data.Add(Data1.Id, _serializer.SerializeToToken(new Data1_v0(){Value = _data1Value}));
+            data.Add(Data2.Id, _serializer.SerializeToToken(new Data2_v0(){Foo = new Foo()
             {
                 Id = _data2Id,
                 Value = _data2Value

@@ -1,4 +1,5 @@
 using Calluna.DI;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 
 namespace Calluna.Persistence
@@ -6,9 +7,9 @@ namespace Calluna.Persistence
     public abstract class DataSaveLoader : MonoBehaviour
     {
         public abstract string DataId { get; }
-        public abstract void Load(string value);
+        public abstract void Load(JToken value);
         public abstract void LoadDefault();
-        public abstract string GetSerializedData();
+        public abstract JToken GetSerializedData();
     }
 
     public abstract class DataSaveLoader<TData> : DataSaveLoader, Injectable
@@ -20,7 +21,7 @@ namespace Calluna.Persistence
             _serializer = resolver.Resolve<JsonSerializer>();
         }
 
-        public override void Load(string value)
+        public override void Load(JToken value)
         {
             TData data = _serializer.Deserialize<TData>(value);
             HandleLoadedData(data);
@@ -31,10 +32,10 @@ namespace Calluna.Persistence
             HandleLoadedData(GetDefaultData());
         }
 
-        public override string GetSerializedData()
+        public override JToken GetSerializedData()
         {
             TData data = GetData();
-            return _serializer.Serialize(data);
+            return _serializer.SerializeToToken(data);
         }
 
         protected abstract void HandleLoadedData(TData data);

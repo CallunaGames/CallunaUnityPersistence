@@ -1,4 +1,5 @@
 using System;
+using Newtonsoft.Json.Linq;
 
 namespace Calluna.Persistence
 {
@@ -6,6 +7,6 @@ namespace Calluna.Persistence
     public struct GameDataEntry
     {
         public string Id;
-        public string Data;
+        public JToken Data;
     }
 }

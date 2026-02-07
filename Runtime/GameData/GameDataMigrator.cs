@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Calluna.DI;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 
 namespace Calluna.Persistence
@@ -8,13 +9,13 @@ namespace Calluna.Persistence
     {
         public abstract int Version { get; }
 
-        public abstract void Migrate(Dictionary<string, string> data);
+        public abstract void Migrate(Dictionary<string, JToken> data);
 
         protected JsonSerializer _serializer;
         
         public virtual void Inject(Resolver resolver)
         {
-            _serializer = new JsonSerializer();
+            _serializer = resolver.Resolve<JsonSerializer>();
         }
     }
 }

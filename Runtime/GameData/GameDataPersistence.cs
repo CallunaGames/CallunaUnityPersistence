@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Calluna.DI;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 
 namespace Calluna.Persistence
@@ -9,9 +10,9 @@ namespace Calluna.Persistence
     public class GameDataPersistence : Injectable, Initializable
     {
         public ReadonlyObservable<bool> LoadingFailed => _loadFailed;
-        
+
         private Dictionary<string, DataSaveLoader> _saveLoaders = new Dictionary<string, DataSaveLoader>();
-        private Dictionary<string, string> _loadedData = new Dictionary<string, string>();
+        private Dictionary<string, JToken> _loadedData = new Dictionary<string, JToken>();
 
         private Arguments _arguments;
         private SaveLoader _saveLoader;
@@ -19,14 +20,14 @@ namespace Calluna.Persistence
         private int _currentVersion = 0;
         private readonly Observable<bool> _loadFailed = false;
 
-        private Dictionary<string, string> _collectedData;
+        private Dictionary<string, JToken> _collectedData;
         private GameData _gameData;
-        
+
         void Initializable.Initialize()
         {
             _loadFailed.Value = false;
         }
-        
+
         void Injectable.Inject(Resolver resolver)
         {
             _arguments = resolver.Resolve<Arguments>();
@@ -41,7 +42,7 @@ namespace Calluna.Persistence
             try
             {
                 InitMigrators();
-            
+
                 _gameData = _saveLoader.Load(_arguments.GameDataId, CreateDefaultGameData());
                 _loadedData = _gameData.Data.ToDictionary(d => d.Id, d => d.Data);
                 MigrateData(_loadedData, _gameData.Version);
@@ -67,7 +68,7 @@ namespace Calluna.Persistence
                 Debug.LogError("Save was aborted since loading of the GameData failed initially");
                 return;
             }
-            
+
             try
             {
                 CollectSaveData();
@@ -79,13 +80,24 @@ namespace Calluna.Persistence
                 Debug.LogException(e);
             }
         }
-        
+
         /// <summary>
         /// Saves game data with custom data dictionary and version. Use with caution!
         /// </summary>
         /// <param name="data">The serialized key value pairs (Data Id, Serialized Data)</param>
         /// <param name="version">The custom version of this save data</param>
-        public void OverrideSave(Dictionary<string, string> data, int version) => SaveGameData(data, version);
+        public void OverrideSave(Dictionary<string, JToken> data, int version)
+        {
+            try
+            {
+                SaveGameData(data, version);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("Failed to perform override save of game data");
+                Debug.LogException(e);
+            }
+        }
 
         private void InitMigrators()
         {
@@ -100,13 +112,13 @@ namespace Calluna.Persistence
             _currentVersion = _migrators.Last().Version;
         }
 
-        private void MigrateData(Dictionary<string, string> loadedData, int dataVersion)
+        private void MigrateData(Dictionary<string, JToken> loadedData, int dataVersion)
         {
             if (dataVersion == _currentVersion)
                 return;
             foreach (GameDataMigrator migrator in _migrators)
             {
-                if(dataVersion < migrator.Version)
+                if (dataVersion < migrator.Version)
                     migrator.Migrate(loadedData);
             }
         }
@@ -121,7 +133,7 @@ namespace Calluna.Persistence
 
         private void TryLoadData(DataSaveLoader saveLoader)
         {
-            if (_loadedData.TryGetValue(saveLoader.DataId, out string serializedData))
+            if (_loadedData.TryGetValue(saveLoader.DataId, out JToken serializedData))
                 saveLoader.Load(serializedData);
             else
                 saveLoader.LoadDefault();
@@ -129,7 +141,7 @@ namespace Calluna.Persistence
 
         private void CollectSaveData()
         {
-            _collectedData ??= new Dictionary<string, string>(_saveLoaders.Count);
+            _collectedData ??= new Dictionary<string, JToken>(_saveLoaders.Count);
             _collectedData.Clear();
             foreach (DataSaveLoader saveLoader in _saveLoaders.Values)
             {
@@ -139,12 +151,14 @@ namespace Calluna.Persistence
             }
         }
 
-        private void SaveGameData(Dictionary<string, string> data, int version)
+        private void SaveGameData(Dictionary<string, JToken> data, int version)
         {
             _gameData ??= new GameData();
-            GameDataEntry[] entries = _gameData.Data?.Length == _collectedData.Count ? _gameData.Data : new GameDataEntry[_collectedData.Count];
+            GameDataEntry[] entries = _gameData.Data?.Length == data.Count
+                ? _gameData.Data
+                : new GameDataEntry[data.Count];
             int i = 0;
-            foreach (KeyValuePair<string, string> pair in data)
+            foreach (KeyValuePair<string, JToken> pair in data)
             {
                 GameDataEntry entry = entries[i];
                 entry.Id = pair.Key;
@@ -152,6 +166,7 @@ namespace Calluna.Persistence
                 entries[i] = entry;
                 i++;
             }
+
             _gameData.Version = version;
             _gameData.Data = entries;
             _saveLoader.Save(_arguments.GameDataId, _gameData);

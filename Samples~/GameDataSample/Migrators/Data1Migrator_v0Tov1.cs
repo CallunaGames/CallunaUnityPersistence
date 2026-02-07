@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 
 namespace Calluna.Persistence.Samples.GameData
@@ -7,7 +8,7 @@ namespace Calluna.Persistence.Samples.GameData
     {
         public override int Version => 1;
         
-        public override void Migrate(Dictionary<string, string> data)
+        public override void Migrate(Dictionary<string, JToken> data)
         {
             Data1_v0 formerData = _serializer.Deserialize<Data1_v0>(data[Data1.Id]);
             Data1_v1 newData = new Data1_v1(){Value = Mathf.RoundToInt(formerData.Value)};

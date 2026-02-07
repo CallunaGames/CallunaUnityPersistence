@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Calluna.DI;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 
 namespace Calluna.Persistence
@@ -14,8 +15,8 @@ namespace Calluna.Persistence
         private string _fileName;
         private string _path;
 
-        private Dictionary<string, string> _persistedData;
-        private Dictionary<string, string> persistedData => _persistedData ??= ReadOrCreateData();
+        private Dictionary<string, JToken> _persistedData;
+        private Dictionary<string, JToken> persistedData => _persistedData ??= ReadOrCreateData();
 
         private bool hasStreams => _streams is { Item1: not null, Item2: not null, Item3: not null};
 
@@ -49,7 +50,7 @@ namespace Calluna.Persistence
 
         public void Save<T>(string id, T value)
         {
-            persistedData[id] = _serializer.Serialize(value);
+            persistedData[id] = _serializer.SerializeToToken(value);
             SaveData();
         }
 
@@ -67,17 +68,17 @@ namespace Calluna.Persistence
             OnClear?.Invoke();
         }
 
-        private Dictionary<string, string> ReadOrCreateData()
+        private Dictionary<string, JToken> ReadOrCreateData()
         {
             if (_textFileReadWriter.Has(_path))
             {
                 string text = _textFileReadWriter.ReadText(GetOrOpenStreams());
-                return _serializer.Deserialize<Dictionary<string, string>>(text) ??
-                       new Dictionary<string, string>();
+                return _serializer.Deserialize<Dictionary<string, JToken>>(text) ??
+                       new Dictionary<string, JToken>();
             }
 
             _textFileReadWriter.Create(_path);
-            return new Dictionary<string, string>();
+            return new Dictionary<string, JToken>();
         }
 
         private void SaveData()
