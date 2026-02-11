@@ -10,22 +10,26 @@ namespace Calluna.Persistence
     public class GameDataPersistence : Injectable, Initializable
     {
         public ReadonlyObservable<bool> LoadingFailed => _loadFailed;
-
-        private Dictionary<string, DataSaveLoader> _saveLoaders = new Dictionary<string, DataSaveLoader>();
-        private Dictionary<string, JToken> _loadedData = new Dictionary<string, JToken>();
+        public ReadonlyObservable<bool> DataWasReset => _dataWasReset;
+        
+        private int lastSupportedVersion => _arguments.LastSupportedVersion;
+        private int currentVersion => _arguments.CurrentVersion;
 
         private Arguments _arguments;
         private SaveLoader _saveLoader;
+        
+        private Dictionary<string, DataSaveLoader> _saveLoaders = new Dictionary<string, DataSaveLoader>();
+        private Dictionary<string, JToken> _loadedData = new Dictionary<string, JToken>();
         private IOrderedEnumerable<GameDataMigrator> _migrators;
-        private int _currentVersion = 0;
         private readonly Observable<bool> _loadFailed = false;
-
+        private readonly Observable<bool> _dataWasReset = false;
         private Dictionary<string, JToken> _collectedData;
         private GameData _gameData;
 
         void Initializable.Initialize()
         {
             _loadFailed.Value = false;
+            _dataWasReset.Value = false;
         }
 
         void Injectable.Inject(Resolver resolver)
@@ -36,15 +40,16 @@ namespace Calluna.Persistence
 
         /// <summary>
         /// Loads the saved GameData. Uses the default value of each data if no GameData is found.
+        /// Resets GameData if the data version is not supported anymore
         /// </summary>
         public void Load()
         {
             try
             {
-                InitMigrators();
-
-                _gameData = _saveLoader.Load(_arguments.GameDataId, CreateDefaultGameData());
+                _gameData = LoadGameData();
                 _loadedData = _gameData.Data.ToDictionary(d => d.Id, d => d.Data);
+                
+                InitMigrators();
                 MigrateData(_loadedData, _gameData.Version);
 
                 _saveLoaders = _arguments.SaveLoaders.ToDictionary(s => s.DataId);
@@ -72,7 +77,7 @@ namespace Calluna.Persistence
             try
             {
                 CollectSaveData();
-                SaveGameData(_collectedData, _currentVersion);
+                SaveGameData(_collectedData, currentVersion);
             }
             catch (Exception e)
             {
@@ -99,6 +104,17 @@ namespace Calluna.Persistence
             }
         }
 
+        private GameData LoadGameData()
+        {
+            GameData defaultData = CreateDefaultGameData();
+            GameData data = _saveLoader.Load(_arguments.GameDataId, defaultData);
+            if (data.Version >= lastSupportedVersion)
+                return data;
+            Debug.LogWarning(
+                $"The loaded data version {data.Version} is not supported anymore. Therefor the game data was reset");
+            return defaultData;
+        }
+
         private void InitMigrators()
         {
             if (_arguments.Migrators == null || _arguments.Migrators.Count == 0)
@@ -109,16 +125,15 @@ namespace Calluna.Persistence
 
             ValidateVersions(_arguments.Migrators);
             _migrators = _arguments.Migrators.OrderBy(m => m.Version);
-            _currentVersion = _migrators.Last().Version;
         }
 
         private void MigrateData(Dictionary<string, JToken> loadedData, int dataVersion)
         {
-            if (dataVersion == _currentVersion)
+            if (dataVersion >= currentVersion)
                 return;
             foreach (GameDataMigrator migrator in _migrators)
             {
-                if (dataVersion < migrator.Version)
+                if(dataVersion < migrator.Version && migrator.Version <= currentVersion)
                     migrator.Migrate(loadedData);
             }
         }
@@ -187,12 +202,14 @@ namespace Calluna.Persistence
 
         private GameData CreateDefaultGameData()
         {
-            return new GameData() { Version = _currentVersion, Data = Array.Empty<GameDataEntry>() };
+            return new GameData() { Version = currentVersion, Data = Array.Empty<GameDataEntry>() };
         }
 
         public class Arguments
         {
             public string GameDataId;
+            public int LastSupportedVersion;
+            public int CurrentVersion;
             public IReadOnlyList<GameDataMigrator> Migrators;
             public IReadOnlyList<DataSaveLoader> SaveLoaders;
         }
