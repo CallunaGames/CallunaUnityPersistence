@@ -33,6 +33,11 @@
       "displayName": "Failed Game Data Loading Sample",
       "description": "Sample for showing how the packages handles the failure of game data loading",
       "path": "Samples~/FailedGameDataLoadingSample"
+    },
+    {
+      "displayName": "Observables Sample",
+      "description": "Sample for subscribing to LoadingFailed, DataWasReset, and SaveLoader.OnClear",
+      "path": "Samples~/ObservablesSample"
     }
   ],
   "keywords": [

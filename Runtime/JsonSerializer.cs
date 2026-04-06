@@ -21,8 +21,8 @@ namespace Calluna.Persistence
         public JToken SerializeToToken<T>(T value) =>
             JToken.FromObject(value, _jsonSerializer);
 
-        public T Deserialize<T>(string stringData) =>
-            JsonConvert.DeserializeObject<T>(stringData, _settings);
+        public T Deserialize<T>(string stringData) => !string.IsNullOrEmpty(stringData) ?
+            JsonConvert.DeserializeObject<T>(stringData, _settings) : default;
 
         public T Deserialize<T>(JToken token)
         {

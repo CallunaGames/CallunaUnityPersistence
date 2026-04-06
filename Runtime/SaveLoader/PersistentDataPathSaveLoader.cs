@@ -38,7 +38,7 @@ namespace Calluna.Persistence
 
         public bool Has(string id)
         {
-            return persistedData.ContainsKey(id);
+            return _persistedData != null && _persistedData.ContainsKey(id);
         }
 
         public T Load<T>(string id, T defaultValue = default(T))
