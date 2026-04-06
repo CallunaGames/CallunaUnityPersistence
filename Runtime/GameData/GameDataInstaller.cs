@@ -10,7 +10,8 @@ namespace Calluna.Persistence
         [SerializeField] private List<DataSaveLoader> _saveLoaders = new List<DataSaveLoader>();
         [SerializeField] private string _gameDataId = "__GameData__";
         [SerializeField] private int _currentVersion = 0;
-        [SerializeField] private int _lastSupportedVersion = 0;
+        [SerializeField, UnityEngine.Serialization.FormerlySerializedAs("_lastSupportedVersion")]
+        private int _minSupportedVersion = 0;
         [SerializeField] private bool _loadDataOnInit = true;
         [SerializeField] private bool _saveDataOnClean = true;
         
@@ -21,7 +22,7 @@ namespace Calluna.Persistence
                 Migrators = _migrators,
                 GameDataId = _gameDataId,
                 SaveLoaders = _saveLoaders,
-                LastSupportedVersion = _lastSupportedVersion,
+                MinSupportedVersion = _minSupportedVersion,
                 CurrentVersion = _currentVersion
             };
             

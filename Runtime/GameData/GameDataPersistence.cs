@@ -11,16 +11,21 @@ namespace Calluna.Persistence
     {
         public ReadonlyObservable<bool> LoadingFailed => _loadFailed;
         public ReadonlyObservable<bool> DataWasReset => _dataWasReset;
-        
-        private int lastSupportedVersion => _arguments.LastSupportedVersion;
+
+        // Increment this constant and add a new GameDataStructureMigrationStep when GameData's class shape changes.
+        private const int CurrentGameDataStructureVersion = 1;
+
+        private int minSupportedVersion => _arguments.MinSupportedVersion;
         private int currentVersion => _arguments.CurrentVersion;
 
         private Arguments _arguments;
         private SaveLoader _saveLoader;
-        
+        private JsonSerializer _serializer;
+
         private Dictionary<string, DataSaveLoader> _saveLoaders = new Dictionary<string, DataSaveLoader>();
         private Dictionary<string, JToken> _loadedData = new Dictionary<string, JToken>();
-        private IOrderedEnumerable<GameDataMigrator> _migrators;
+        private List<GameDataMigrator> _migrators;
+        private List<GameDataStructureMigrationStep> _structureSteps;
         private readonly Observable<bool> _loadFailed = false;
         private readonly Observable<bool> _dataWasReset = false;
         private Dictionary<string, JToken> _collectedData;
@@ -36,6 +41,14 @@ namespace Calluna.Persistence
         {
             _arguments = resolver.Resolve<Arguments>();
             _saveLoader = resolver.Resolve<SaveLoader>();
+            _serializer = resolver.Resolve<JsonSerializer>();
+
+            // Add new GameDataStructureMigrationStep entries here when GameData's class shape changes.
+            _structureSteps = new List<GameDataStructureMigrationStep>
+            {
+                new GameDataStructureMigration_v0Tov1(_serializer),
+            };
+            _structureSteps.Sort((a, b) => a.TargetVersion.CompareTo(b.TargetVersion));
         }
 
         /// <summary>
@@ -46,19 +59,26 @@ namespace Calluna.Persistence
         {
             try
             {
-                _gameData = LoadGameData();
-                _loadedData = _gameData.Data.ToDictionary(d => d.Id, d => d.Data);
-                
                 InitMigrators();
+                _gameData = LoadGameData();
+                _loadedData = _gameData.Entries.ToDictionary(d => d.Id, d => d.Payload);
+
                 MigrateData(_loadedData, _gameData.Version);
 
-                _saveLoaders = _arguments.SaveLoaders.ToDictionary(s => s.DataId);
-                LoadDataSaveLoaders();
+                _saveLoaders = new Dictionary<string, DataSaveLoader>(_arguments.SaveLoaders.Count);
+                foreach (DataSaveLoader loader in _arguments.SaveLoaders)
+                {
+                    if (!_saveLoaders.TryAdd(loader.DataId, loader))
+                        throw new InvalidOperationException(
+                            $"Duplicate DataSaveLoader id '{loader.DataId}'. Each loader must have a unique DataId.");
+                }
+                foreach (DataSaveLoader saveLoader in _saveLoaders.Values)
+                    TryLoadData(saveLoader);
             }
             catch (Exception e)
             {
                 _loadFailed.Value = true;
-                Debug.LogError("Failed to load the game data");
+                Debug.LogError($"Failed to load game data '{_arguments.GameDataId}'");
                 Debug.LogException(e);
             }
         }
@@ -81,7 +101,7 @@ namespace Calluna.Persistence
             }
             catch (Exception e)
             {
-                Debug.LogError("Failed to save the game data");
+                Debug.LogError($"Failed to save game data '{_arguments.GameDataId}'");
                 Debug.LogException(e);
             }
         }
@@ -93,6 +113,12 @@ namespace Calluna.Persistence
         /// <param name="version">The custom version of this save data</param>
         public void OverrideSave(Dictionary<string, JToken> data, int version)
         {
+            if (_loadFailed.Value)
+            {
+                Debug.LogError("Override save was aborted since loading of the GameData failed initially");
+                return;
+            }
+
             try
             {
                 SaveGameData(data, version);
@@ -106,25 +132,47 @@ namespace Calluna.Persistence
 
         private GameData LoadGameData()
         {
-            GameData defaultData = CreateDefaultGameData();
-            GameData data = _saveLoader.Load(_arguments.GameDataId, defaultData);
-            if (data.Version >= lastSupportedVersion)
+            JObject rawData = _saveLoader.Load<JObject>(_arguments.GameDataId, null);
+            if (rawData == null)
+                return CreateDefaultGameData();
+
+            int structureVersion = rawData["StructureVersion"]?.Value<int>() ?? 0;
+            GameData data;
+            if (structureVersion < CurrentGameDataStructureVersion)
+            {
+                string json = _serializer.Serialize(rawData);
+                foreach (GameDataStructureMigrationStep step in _structureSteps)
+                {
+                    if (structureVersion < step.TargetVersion && step.TargetVersion <= CurrentGameDataStructureVersion)
+                        json = step.Migrate(json);
+                }
+                data = _serializer.Deserialize<GameData>(json);
+                data.StructureVersion = CurrentGameDataStructureVersion;
+            }
+            else
+            {
+                data = _serializer.Deserialize<GameData>(rawData);
+            }
+
+            if (data.Version >= minSupportedVersion)
                 return data;
             Debug.LogWarning(
-                $"The loaded data version {data.Version} is not supported anymore. Therefor the game data was reset");
-            return defaultData;
+                $"The loaded data version {data.Version} is below the minimum supported version {minSupportedVersion}. The game data was reset.");
+            _dataWasReset.Value = true;
+            return CreateDefaultGameData();
         }
 
         private void InitMigrators()
         {
             if (_arguments.Migrators == null || _arguments.Migrators.Count == 0)
             {
-                _migrators = new List<GameDataMigrator>().OrderBy(m => m.Version);
+                _migrators = new List<GameDataMigrator>(0);
                 return;
             }
 
             ValidateVersions(_arguments.Migrators);
-            _migrators = _arguments.Migrators.OrderBy(m => m.Version);
+            _migrators = new List<GameDataMigrator>(_arguments.Migrators);
+            _migrators.Sort((a, b) => a.Version.CompareTo(b.Version));
         }
 
         private void MigrateData(Dictionary<string, JToken> loadedData, int dataVersion)
@@ -133,25 +181,26 @@ namespace Calluna.Persistence
                 return;
             foreach (GameDataMigrator migrator in _migrators)
             {
-                if(dataVersion < migrator.Version && migrator.Version <= currentVersion)
+                if (dataVersion < migrator.Version && migrator.Version <= currentVersion)
                     migrator.Migrate(loadedData);
-            }
-        }
-
-        private void LoadDataSaveLoaders()
-        {
-            foreach (DataSaveLoader saveLoader in _saveLoaders.Values)
-            {
-                TryLoadData(saveLoader);
             }
         }
 
         private void TryLoadData(DataSaveLoader saveLoader)
         {
-            if (_loadedData.TryGetValue(saveLoader.DataId, out JToken serializedData))
-                saveLoader.Load(serializedData);
-            else
+            try
+            {
+                if (_loadedData.TryGetValue(saveLoader.DataId, out JToken serializedData))
+                    saveLoader.Load(serializedData);
+                else
+                    saveLoader.LoadDefault();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Failed to load data for '{saveLoader.DataId}'. Loading default instead.");
+                Debug.LogException(e);
                 saveLoader.LoadDefault();
+            }
         }
 
         private void CollectSaveData()
@@ -162,34 +211,35 @@ namespace Calluna.Persistence
             {
                 if (!_collectedData.TryAdd(saveLoader.DataId, saveLoader.GetSerializedData()))
                     throw new InvalidOperationException(
-                        $"Failed to save game data do to the duplicate id \"{saveLoader.DataId}\"");
+                        $"Failed to save game data due to the duplicate id \"{saveLoader.DataId}\"");
             }
         }
 
         private void SaveGameData(Dictionary<string, JToken> data, int version)
         {
             _gameData ??= new GameData();
-            GameDataEntry[] entries = _gameData.Data?.Length == data.Count
-                ? _gameData.Data
+            GameDataEntry[] entries = _gameData.Entries?.Length == data.Count
+                ? _gameData.Entries
                 : new GameDataEntry[data.Count];
             int i = 0;
             foreach (KeyValuePair<string, JToken> pair in data)
             {
                 GameDataEntry entry = entries[i];
                 entry.Id = pair.Key;
-                entry.Data = pair.Value;
+                entry.Payload = pair.Value;
                 entries[i] = entry;
                 i++;
             }
 
+            _gameData.StructureVersion = CurrentGameDataStructureVersion;
             _gameData.Version = version;
-            _gameData.Data = entries;
+            _gameData.Entries = entries;
             _saveLoader.Save(_arguments.GameDataId, _gameData);
         }
 
-        private void ValidateVersions(IReadOnlyList<GameDataMigrator> migrators)
+        private static void ValidateVersions(IReadOnlyList<GameDataMigrator> migrators)
         {
-            HashSet<int> versions = new HashSet<int>();
+            HashSet<int> versions = new HashSet<int>(migrators.Count);
             foreach (GameDataMigrator migrator in migrators)
             {
                 if (migrator.Version <= 0)
@@ -200,15 +250,13 @@ namespace Calluna.Persistence
             }
         }
 
-        private GameData CreateDefaultGameData()
-        {
-            return new GameData() { Version = currentVersion, Data = Array.Empty<GameDataEntry>() };
-        }
+        private GameData CreateDefaultGameData() =>
+            new GameData { StructureVersion = CurrentGameDataStructureVersion, Version = currentVersion, Entries = Array.Empty<GameDataEntry>() };
 
-        public class Arguments
+        internal class Arguments
         {
             public string GameDataId;
-            public int LastSupportedVersion;
+            public int MinSupportedVersion;
             public int CurrentVersion;
             public IReadOnlyList<GameDataMigrator> Migrators;
             public IReadOnlyList<DataSaveLoader> SaveLoaders;

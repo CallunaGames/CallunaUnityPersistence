@@ -1,38 +1,56 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace Calluna.Persistence
 {
-    public class DataMigrator<T> : DataMigrator
+    /// <summary>
+    /// Migrates a single typed value across versions. Used exclusively with <see cref="VersionedDataSaveLoader"/>.
+    /// This is independent of <see cref="GameDataMigrator"/>, which operates on the composite GameData dictionary.
+    /// </summary>
+    public class VersionedDataMigrator<T> : VersionedDataMigrator
     {
-        public DataMigrator(IEnumerable<DataMigrationStep> steps = null) : base(steps) { }
-        
-        public override Type DataType => typeof(T);
-    }
-    
-    public abstract class DataMigrator
-    {
-        public abstract Type DataType { get; }
+        public VersionedDataMigrator(IEnumerable<VersionedDataMigrationStep> steps = null) : base(steps) { }
 
-        private Dictionary<int, DataMigrationStep> _steps;
+        internal override Type DataType => typeof(T);
+    }
+
+    public abstract class VersionedDataMigrator
+    {
+        internal abstract Type DataType { get; }
+
+        private Dictionary<int, VersionedDataMigrationStep> _steps;
         private int _currentVersion;
 
-        public DataMigrator(IEnumerable<DataMigrationStep> steps = null)
+        public VersionedDataMigrator(IEnumerable<VersionedDataMigrationStep> steps = null)
         {
-            bool hasSteps = steps != null;
-            _steps = hasSteps ? steps.ToDictionary(s => s.TargetVersion) : new Dictionary<int, DataMigrationStep>();
-            _currentVersion = hasSteps ? steps.Min(s => s.TargetVersion) : 0;
+            if (steps == null)
+            {
+                _steps = new Dictionary<int, VersionedDataMigrationStep>();
+                _currentVersion = 0;
+                return;
+            }
+
+            _steps = new Dictionary<int, VersionedDataMigrationStep>();
+            _currentVersion = 0;
+            foreach (VersionedDataMigrationStep step in steps)
+            {
+                _steps[step.TargetVersion] = step;
+                if (step.TargetVersion > _currentVersion)
+                    _currentVersion = step.TargetVersion;
+            }
         }
 
-        public string Migrate(VersionedSaveData versionedSaveData)
+        internal string Migrate(VersionedSaveData versionedSaveData)
         {
             int version = versionedSaveData.Version;
             string data = versionedSaveData.Data;
             for (int i = version; i < _currentVersion; i++)
             {
                 int migratorVersion = i + 1;
-                data = _steps[migratorVersion].Migrate(data);
+                if (!_steps.TryGetValue(migratorVersion, out VersionedDataMigrationStep step))
+                    throw new InvalidOperationException(
+                        $"No migration step registered for version {migratorVersion} on type '{DataType.Name}'.");
+                data = step.Migrate(data);
             }
 
             return data;

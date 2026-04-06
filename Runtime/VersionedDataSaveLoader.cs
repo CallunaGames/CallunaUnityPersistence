@@ -7,13 +7,16 @@ namespace Calluna.Persistence
 {
     public class VersionedDataSaveLoader : Injectable
     {
-        private Dictionary<Type, DataMigrator> _dataMigrators;
+        private Dictionary<Type, VersionedDataMigrator> _dataMigrators;
         private SaveLoader _saveLoader;
         private JsonSerializer _serializer;
 
         public void Inject(Resolver resolver)
         {
-            _dataMigrators = CreateMigratorDictionary(resolver.ResolveOptional<IEnumerable<DataMigrator>>());
+            IEnumerable<VersionedDataMigrator> migrators = resolver.ResolveOptional<IEnumerable<VersionedDataMigrator>>();
+            _dataMigrators = migrators == null
+                ? new Dictionary<Type, VersionedDataMigrator>()
+                : migrators.ToDictionary(m => m.DataType);
             _saveLoader = resolver.Resolve<SaveLoader>();
             _serializer = resolver.Resolve<JsonSerializer>();
         }
@@ -25,7 +28,7 @@ namespace Calluna.Persistence
             if (saveData == null)
                 return defaultValue;
 
-            if (!_dataMigrators.TryGetValue(typeof(T), out DataMigrator migrator))
+            if (!_dataMigrators.TryGetValue(typeof(T), out VersionedDataMigrator migrator))
             {
                 throw new ArgumentException($"There is missing a data migrator for '{typeof(T)}'");
             }
@@ -41,9 +44,5 @@ namespace Calluna.Persistence
             _saveLoader.Save(id, versionedData);
         }
 
-        private Dictionary<Type, DataMigrator> CreateMigratorDictionary(IEnumerable<DataMigrator> migrators)
-        {
-            return migrators == null ? new Dictionary<Type, DataMigrator>() : migrators.ToDictionary(m => m.DataType);
-        }
     }
 }

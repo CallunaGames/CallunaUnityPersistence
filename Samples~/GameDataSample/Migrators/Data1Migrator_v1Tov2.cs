@@ -16,7 +16,7 @@ namespace Calluna.Persistence.Samples.GameData
                 Bar = data2.Bar,
                 Value = formerData.Value.ToString()
             };
-            data[Data1.Id] = _serializer.Serialize(newData);
+            data[Data1.Id] = _serializer.SerializeToToken(newData);
             Debug.Log($"Migrating {formerData} to {newData}");
         }
     }

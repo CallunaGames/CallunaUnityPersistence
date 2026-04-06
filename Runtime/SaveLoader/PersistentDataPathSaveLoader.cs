@@ -43,9 +43,9 @@ namespace Calluna.Persistence
 
         public T Load<T>(string id, T defaultValue = default(T))
         {
-            if (!Has(id))
+            if (!persistedData.TryGetValue(id, out JToken token))
                 return defaultValue;
-            return _serializer.Deserialize<T>(persistedData[id]);
+            return _serializer.Deserialize<T>(token);
         }
 
         public void Save<T>(string id, T value)

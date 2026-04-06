@@ -2,16 +2,21 @@ using Calluna.DI;
 
 namespace Calluna.Persistence
 {
-    public abstract class DataMigrationStep
+    /// <summary>
+    /// A single migration step between two consecutive versions of a typed value.
+    /// Used with <see cref="VersionedDataMigrator{T}"/> and <see cref="VersionedDataSaveLoader"/>.
+    /// This is independent of <see cref="GameDataMigrator"/>, which operates on the composite GameData dictionary.
+    /// </summary>
+    public abstract class VersionedDataMigrationStep
     {
         public abstract int TargetVersion { get; }
         public abstract string Migrate(string data);
     }
 
-    public abstract class DataMigrationStep<TFrom, TTo> : DataMigrationStep, Injectable
+    public abstract class VersionedDataMigrationStep<TFrom, TTo> : VersionedDataMigrationStep, Injectable
     {
         private JsonSerializer _serializer;
-        
+
         public virtual void Inject(Resolver resolver)
         {
             _serializer = resolver.Resolve<JsonSerializer>();

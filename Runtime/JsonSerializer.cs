@@ -15,32 +15,19 @@ namespace Calluna.Persistence
             _jsonSerializer = resolver.ResolveOptional<Newtonsoft.Json.JsonSerializer>() ?? CreateDefaultSerializer();
         }
 
-        public string Serialize<T>(T value)
-        {
-            string data = JsonConvert.SerializeObject(value, _settings);
-            return data;
-        }
+        public string Serialize<T>(T value) =>
+            JsonConvert.SerializeObject(value, _settings);
 
-        public JToken SerializeToToken<T>(T value)
-        {
-            JToken data = JToken.FromObject(value, _jsonSerializer);
-            return data;
-        }
+        public JToken SerializeToToken<T>(T value) =>
+            JToken.FromObject(value, _jsonSerializer);
 
-        public T Deserialize<T>(string stringData)
-        {
-            T data = JsonConvert.DeserializeObject<T>(stringData, _settings);
-            return data;
-        }
+        public T Deserialize<T>(string stringData) =>
+            JsonConvert.DeserializeObject<T>(stringData, _settings);
 
         public T Deserialize<T>(JToken token)
         {
             if (token is JValue jValue)
                 return Deserialize<T>(jValue);
-            if (token is JObject jObject)
-                return jObject.ToObject<T>(_jsonSerializer);
-            if (token is JArray jArray)
-                return jArray.ToObject<T>(_jsonSerializer);
             return token.ToObject<T>(_jsonSerializer);
         }
 

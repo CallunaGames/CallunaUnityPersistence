@@ -11,7 +11,7 @@ namespace Calluna.Persistence.Samples.GameData
         {
             Data2_v0 formerData = _serializer.Deserialize<Data2_v0>(data[Data2.Id]);
             Data2 newData = new Data2(){Bar = new Bar(){IdAndValue = $"{formerData.Foo.Id} {formerData.Foo.Value}"}};
-            data[Data2.Id] = _serializer.Serialize(newData);
+            data[Data2.Id] = _serializer.SerializeToToken(newData);
             Debug.Log($"Migrating {formerData} to {newData}");
         }
     }

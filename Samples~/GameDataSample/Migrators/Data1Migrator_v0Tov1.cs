@@ -12,7 +12,7 @@ namespace Calluna.Persistence.Samples.GameData
         {
             Data1_v0 formerData = _serializer.Deserialize<Data1_v0>(data[Data1.Id]);
             Data1_v1 newData = new Data1_v1(){Value = Mathf.RoundToInt(formerData.Value)};
-            data[Data1.Id] = _serializer.Serialize(newData);
+            data[Data1.Id] = _serializer.SerializeToToken(newData);
             Debug.Log($"Migrating {formerData} to {newData}");
         }
     }

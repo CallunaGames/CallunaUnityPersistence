@@ -1,5 +1,4 @@
 using System.IO;
-using UnityEngine;
 
 namespace Calluna.Persistence
 {
@@ -47,8 +46,9 @@ namespace Calluna.Persistence
 
         public void Close((FileStream, StreamWriter, StreamReader) streams)
         {
+            streams.Item2.Dispose();
+            streams.Item3.Dispose();
             streams.Item1.Dispose();
-            Debug.Log("Streams closed");
         }
         
         public void Create(string path) => File.CreateText(path).Close();

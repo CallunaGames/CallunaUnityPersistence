@@ -5,6 +5,11 @@ using UnityEngine;
 
 namespace Calluna.Persistence
 {
+    /// <summary>
+    /// Migrates the composite GameData dictionary across versions. Used exclusively with <see cref="GameDataPersistence"/>.
+    /// This is independent of <see cref="VersionedDataMigrator{T}"/>, which migrates individual typed values
+    /// used with <see cref="VersionedDataSaveLoader"/>.
+    /// </summary>
     public abstract class GameDataMigrator : MonoBehaviour, Injectable
     {
         public abstract int Version { get; }
@@ -12,7 +17,7 @@ namespace Calluna.Persistence
         public abstract void Migrate(Dictionary<string, JToken> data);
 
         protected JsonSerializer _serializer;
-        
+
         public virtual void Inject(Resolver resolver)
         {
             _serializer = resolver.Resolve<JsonSerializer>();

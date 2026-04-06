@@ -17,11 +17,11 @@ namespace Calluna.Persistence.PlayerPrefsSample
             binder.BindToNewSelf<VersionedDataSaveLoader>().AsSingle();
 
             binder.Bind<SaveLoader>().ToNew<PlayerPrefsSaveLoader>().AsSingle();
-            
+
             binder.BindToNewSelf<JsonSerializer>().AsSingle();
 
-            binder.Bind<IEnumerable<DataMigrator>>()
-                .To<List<DataMigrator>>()
+            binder.Bind<IEnumerable<VersionedDataMigrator>>()
+                .To<List<VersionedDataMigrator>>()
                 .FromMethod(CreateDataMigrators)
                 .AsSingle();
 
@@ -29,16 +29,16 @@ namespace Calluna.Persistence.PlayerPrefsSample
             binder.BindToNewSelf<DataMigrationSteps.DataV1ToV2>();
         }
 
-        private List<DataMigrator> CreateDataMigrators()
+        private List<VersionedDataMigrator> CreateDataMigrators()
         {
-            List<DataMigrationStep> steps = new List<DataMigrationStep>()
+            List<VersionedDataMigrationStep> steps = new List<VersionedDataMigrationStep>()
             {
                 _resolver.Resolve<DataMigrationSteps.DataV0ToV1>(),
                 _resolver.Resolve<DataMigrationSteps.DataV1ToV2>(),
             };
 
-            DataMigrator dataMigrator = new DataMigrator<DataV2>(steps);
-            return new List<DataMigrator>() { dataMigrator };
+            VersionedDataMigrator dataMigrator = new VersionedDataMigrator<DataV2>(steps);
+            return new List<VersionedDataMigrator>() { dataMigrator };
         }
     }
 }

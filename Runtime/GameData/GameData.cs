@@ -1,11 +1,9 @@
-using System;
-
 namespace Calluna.Persistence
 {
-    [Serializable]
-    internal class GameData
+    public class GameData
     {
-        public int Version;
-        public GameDataEntry[] Data;
+        internal int StructureVersion;
+        internal int Version;
+        internal GameDataEntry[] Entries;
     }
 }

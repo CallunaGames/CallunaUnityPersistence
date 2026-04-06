@@ -1,6 +1,6 @@
 namespace Calluna.Persistence
 {
-    public class VersionedSaveData
+    internal class VersionedSaveData
     {
         public int Version;
         public string Data;
