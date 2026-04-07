@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace Calluna.Persistence
 {
-    public class LoadGameDataOnInit : MonoBehaviour, Injectable, Initializable
+    internal class LoadGameDataOnInit : MonoBehaviour, Injectable, Initializable
     {
         private GameDataPersistence _gameDataPersistence;
         

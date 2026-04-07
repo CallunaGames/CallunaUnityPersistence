@@ -15,7 +15,7 @@ namespace Calluna.Persistence.Editor
         private MessageType _statusType = MessageType.Info;
 
         [MenuItem("Calluna/Game Data Viewer")]
-        public static void ShowWindow()
+        private static void ShowWindow()
         {
             var window = GetWindow<GameDataViewerWindow>("Game Data Viewer");
             window.minSize = new Vector2(500, 300);

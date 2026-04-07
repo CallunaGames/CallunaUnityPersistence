@@ -1,3 +1,13 @@
+## [1.5.0] - 2026-04-07
+
+### Breaking Changes
+- `DataMigrationStep` renamed to `VersionedDataMigrationStep` and `DataMigrationStep<TFrom, TTo>` renamed to `VersionedDataMigrationStep<TFrom, TTo>`. Update all references and subclasses.
+- `DataMigrator` renamed to `VersionedDataMigrator` and `DataMigrator<T>` renamed to `VersionedDataMigrator<T>`. Update all references and subclasses.
+- `VersionedDataMigrator.DataType` and `VersionedDataMigrator.Migrate()` are now `internal`; external code that overrode or called these members must be removed.
+- `VersionedSaveData` is now `internal`; callers that referenced this type directly must remove those references.
+- `GameDataEntry` is now `internal`; callers that referenced this struct directly must remove those references.
+- `GameDataPersistence.Arguments` is now `internal`; callers that constructed or referenced this class directly must configure persistence through `GameDataInstaller` in the Inspector instead.
+
 ## [1.4.0] - 2026-04-06
 
 ### Breaking Changes

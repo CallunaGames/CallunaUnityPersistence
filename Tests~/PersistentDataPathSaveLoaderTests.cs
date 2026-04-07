@@ -55,31 +55,12 @@ namespace Calluna.Template.Tests
             JsonSerializer serializer = new JsonSerializer();
             ((Injectable)serializer).Inject(serializerResolver.Object);
 
-            TextFileReadWriter readWriter = new TextFileReadWriter();
-
             // The loader concatenates Application.persistentDataPath + FileName.
-            // To use an arbitrary path we put the directory in persistentDataPath and the
-            // file name in the Arguments. However, PersistentDataPathSaveLoader calls
-            // Application.persistentDataPath internally, which isn't easily overridden.
-            // Instead we inject the FULL path as the FileName by using the directory of
-            // the temp path as the persistent data path equivalent — but since that's not
-            // injectable either, we pass the bare filename and rely on the fact that
-            // Path.Combine with an absolute second argument returns the second argument on
-            // Windows (only when the second argument is rooted AND does NOT include a drive
-            // letter — that is NOT guaranteed). The safest approach for Unity edit-mode
-            // tests is to use a path inside the temp folder that mirrors the expected
-            // concatenation, i.e. use only the file name and accept the path will land in
-            // Application.persistentDataPath. We therefore override by providing only the
-            // file name and letting the loader place the file in
+            // We use only the file name and accept the path will land in
             // Application.persistentDataPath, which IS accessible in edit-mode tests.
-            // We capture the actual path by looking at what the loader resolves.
-
-            // Because we cannot control Application.persistentDataPath and Path.Combine
-            // does NOT let the second segment override the root (unlike Unix), we build
-            // the loader against the real persistentDataPath but note the actual path for
-            // cleanup in TearDown.
             string fileName = Path.GetFileName(fullPath);
-            string resolvedPath = Path.Combine(UnityEngine.Application.persistentDataPath, fileName);
+
+            TextFileReadWriter readWriter = new TextFileReadWriter();
 
             Mock<Resolver> loaderResolver = new Mock<Resolver>();
             loaderResolver.Setup(r => r.Resolve<JsonSerializer>()).Returns(serializer);

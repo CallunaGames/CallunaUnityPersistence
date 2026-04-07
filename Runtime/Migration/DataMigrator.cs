@@ -38,6 +38,14 @@ namespace Calluna.Persistence
                 if (step.TargetVersion > _currentVersion)
                     _currentVersion = step.TargetVersion;
             }
+
+            for (int v = 1; v <= _currentVersion; v++)
+            {
+                if (!_steps.ContainsKey(v))
+                    throw new InvalidOperationException(
+                        $"Migration step for version {v} is missing on '{DataType.Name}'. " +
+                        $"Steps must cover every version from 1 to {_currentVersion}.");
+            }
         }
 
         internal string Migrate(VersionedSaveData versionedSaveData)

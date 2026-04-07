@@ -7,7 +7,7 @@ namespace Calluna.Persistence.Samples.Observables
     /// Demonstrates subscribing to GameDataPersistence.LoadingFailed and DataWasReset observables.
     ///
     /// LoadingFailed becomes true when an unrecoverable error occurs during Load().
-    /// DataWasReset becomes true when the loaded data version is below LastSupportedVersion
+    /// DataWasReset becomes true when the loaded data version is below MinSupportedVersion
     /// and all save data has been discarded.
     ///
     /// Both observables fire OnChanged whenever their value changes and expose the

@@ -341,29 +341,16 @@ namespace Calluna.Template.Tests
         // -----------------------------------------------------------------------
 
         [Test]
-        [TestCase("gap_step_1", 1)]
-        [TestCase("gap_step_2", 5)]
-        [Description("Migrate when a step for an intermediate version is missing => throws InvalidOperationException?")]
-        public void VersionedDataMigrator_MissingIntermediateStep_ThrowsInvalidOperationException(string key, int xVal)
+        [Description("VersionedDataMigrator<T> constructor with a gap in steps => throws InvalidOperationException at construction time?")]
+        public void VersionedDataMigrator_MissingIntermediateStep_ThrowsInvalidOperationException()
         {
             JsonSerializer serializer = BuildSerializer();
-            PlayerPrefsSaveLoader saveLoader = BuildPlayerPrefsSaveLoader(serializer);
 
-            // Save DataV0 at version 0.
-            VersionedDataMigrator<DataV0> v0Migrator = new VersionedDataMigrator<DataV0>();
-            VersionedDataSaveLoader writerLoader = BuildVersionedLoader(saveLoader, serializer,
-                new VersionedDataMigrator[] { v0Migrator });
-            writerLoader.Save(key, new DataV0 { X = xVal }, version: 0);
-
-            // Register only step v1→v2 (skipping v0→v1). The migrator's current version is
-            // 2 so it will attempt to migrate from version 0 to 2, first trying step 1
-            // which is missing.
-            VersionedDataMigrator<DataV2> gapMigrator = new VersionedDataMigrator<DataV2>(
-                new VersionedDataMigrationStep[] { new StepV1ToV2(serializer) });
-            VersionedDataSaveLoader readerLoader = BuildVersionedLoader(saveLoader, serializer,
-                new VersionedDataMigrator[] { gapMigrator });
-
-            Assert.Throws<InvalidOperationException>(() => readerLoader.Load<DataV2>(key));
+            // Register only step v1→v2 (skipping v0→v1). The gap should be caught immediately
+            // at construction, before any Load() is attempted.
+            Assert.Throws<InvalidOperationException>(() =>
+                new VersionedDataMigrator<DataV2>(
+                    new VersionedDataMigrationStep[] { new StepV1ToV2(serializer) }));
         }
     }
 }

@@ -3,10 +3,9 @@ using Newtonsoft.Json.Linq;
 
 namespace Calluna.Persistence
 {
-    public struct GameDataEntry
+    internal struct GameDataEntry
     {
-        public string Id;
-        [JsonProperty("Data")]
-        public JToken Payload;
+        [JsonProperty] internal string Id;
+        [JsonProperty("Data")] internal JToken Payload;
     }
 }

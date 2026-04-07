@@ -14,6 +14,9 @@ A Unity UPM package for game data persistence. Provides serialization, versionin
 interface SaveLoader
     class PlayerPrefsSaveLoader : SaveLoader, Injectable
     class PersistentDataPathSaveLoader : SaveLoader, Injectable, Cleanable
+
+class PlayerPrefsSaveLoaderInstaller : MonoInstaller
+class PersistentDataPathSaveLoaderInstaller : MonoInstaller
 ```
 
 **Interface**
@@ -35,16 +38,13 @@ public interface SaveLoader
 
 Stores primitives (`int`, `float`, `bool`, `string`) directly in `PlayerPrefs`. Complex types are JSON-serialised and stored as strings.
 
+Use `PlayerPrefsSaveLoaderInstaller` to wire it. Add the MonoBehaviour to your scene's MonoContext — no further configuration is needed.
+
 ### PersistentDataPathSaveLoader
 
-Stores all data as a `Dictionary<string, JToken>` in a single JSON file under `Application.persistentDataPath`. File streams are kept open for performance and closed when `Clean()` is called. Configure the file name via `PersistentDataPathSaveLoader.Arguments`:
+Stores all data as a `Dictionary<string, JToken>` in a single JSON file under `Application.persistentDataPath`. File streams are kept open for performance and closed when `Clean()` is called.
 
-```csharp
-binder.Bind<SaveLoader>()
-    .ToNew<PersistentDataPathSaveLoader>()
-    .WithArgument(new PersistentDataPathSaveLoader.Arguments { FileName = "MyData.txt" })
-    .AsSingle();
-```
+Use `PersistentDataPathSaveLoaderInstaller` to wire it. Add the MonoBehaviour to your scene's MonoContext and set the **File Name** field in the Inspector (default: `SaveData.txt`).
 
 ### Usage
 
@@ -150,6 +150,19 @@ binder.Bind<IEnumerable<VersionedDataMigrator>>()
     .FromMethod(() => new List<VersionedDataMigrator> { migrator })
     .AsSingle();
 ```
+
+---
+
+## Choosing a migration approach
+
+| | `VersionedDataMigrator` | `GameDataMigrator` |
+|---|---|---|
+| **Scope** | A single typed value stored under one key | The entire composite `GameData` blob |
+| **Use with** | `VersionedDataSaveLoader` (low-level) | `GameDataPersistence` (high-level) |
+| **When to use** | You are saving one independent value and it needs to evolve across versions | You are using the `GameData` system and need to migrate, rename, or restructure data across multiple domains simultaneously |
+| **Granularity** | Per-type: each step converts `TFrom → TTo` | Global: receives and mutates the full `Dictionary<string, JToken>` |
+
+If you are using the `GameData` system, always use `GameDataMigrator`. If you are using `VersionedDataSaveLoader` standalone, always use `VersionedDataMigrator`. Do not mix them for the same data.
 
 ---
 
@@ -291,13 +304,17 @@ T Deserialize<T>(JToken token);
 
 Use `SerializeToToken` / `Deserialize<T>(JToken)` when working inside `GameDataMigrator` or `PersistentDataPathSaveLoader` to avoid unnecessary string round-trips.
 
-Optionally bind a `JsonSerializerSettings` or a `Newtonsoft.Json.JsonSerializer` instance before `JsonSerializer` is injected to customise formatting, culture, or converters:
+### Customising serialisation settings
+
+The predefined installers (`PlayerPrefsSaveLoaderInstaller`, `PersistentDataPathSaveLoaderInstaller`, `GameDataInstaller`) bind `JsonSerializer` with default settings. They do **not** bind `JsonSerializerSettings`, so if you need custom formatting, culture, or converters you must bind it yourself before the installer runs:
 
 ```csharp
-binder.BindToNewSelf<JsonSerializer>()
-    .WithArgument(new JsonSerializerSettings { Formatting = Formatting.Indented })
+binder.Bind<JsonSerializerSettings>()
+    .FromMethod(() => new JsonSerializerSettings { Formatting = Formatting.Indented })
     .AsSingle();
 ```
+
+`JsonSerializer` resolves `JsonSerializerSettings` as optional — if no binding is present the defaults are used, so this step is only needed when you want to override them.
 
 ---
 
@@ -336,3 +353,4 @@ The following samples are available in the Package Manager under **Samples**.
 | **Persistent Data Path Sample** | Demonstrates `PersistentDataPathSaveLoader` with file-based storage. |
 | **Game Data Sample** | Demonstrates the full `GameData` system with multiple `DataSaveLoader` instances and `GameDataMigrator` steps. |
 | **Failed Game Data Loading Sample** | Demonstrates how `GameDataPersistence.LoadingFailed` and `DataWasReset` observables behave when loading encounters an error or an unsupported version. |
+| **Observables Sample** | Demonstrates subscribing to `GameDataPersistence.LoadingFailed`, `DataWasReset`, and `SaveLoader.OnClear` to react to persistence state changes at runtime. |

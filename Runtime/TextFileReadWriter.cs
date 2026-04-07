@@ -2,29 +2,17 @@ using System.IO;
 
 namespace Calluna.Persistence
 {
-    public class TextFileReadWriter
+    internal class TextFileReadWriter
     {
-        public string ReadText(string path)
-        {
-            if(!File.Exists(path))
-                throw new FileNotFoundException("The file could not be found.", path);
-            return File.ReadAllText(path);
-        }
-        
-        public string ReadText((FileStream, StreamWriter, StreamReader) streams)
+        internal string ReadText((FileStream, StreamWriter, StreamReader) streams)
         {
             streams.Item1.Position = 0;
             return streams.Item3.ReadToEnd();
         }
-        
-        public bool Has(string path) => File.Exists(path);
 
-        public void WriteText(string path, string contents)
-        {
-            File.WriteAllText(path, contents);
-        }
+        internal bool Has(string path) => File.Exists(path);
 
-        public (FileStream, StreamWriter, StreamReader) OpenStreams(string path)
+        internal (FileStream, StreamWriter, StreamReader) OpenStreams(string path)
         {
             FileStream fileStream = new FileStream(
                 path,
@@ -36,23 +24,23 @@ namespace Calluna.Persistence
             return (fileStream, streamWriter, streamReader);
         }
 
-        public void Overwrite((FileStream, StreamWriter, StreamReader) streams, string content)
+        internal void Overwrite((FileStream, StreamWriter, StreamReader) streams, string content)
         {
             streams.Item1.SetLength(0);
             streams.Item1.Position = 0;
             streams.Item2.Write(content);
-            streams.Item2.Flush(); 
+            streams.Item2.Flush();
         }
 
-        public void Close((FileStream, StreamWriter, StreamReader) streams)
+        internal void Close((FileStream, StreamWriter, StreamReader) streams)
         {
             streams.Item2.Dispose();
             streams.Item3.Dispose();
             streams.Item1.Dispose();
         }
-        
-        public void Create(string path) => File.CreateText(path).Close();
 
-        public void Delete(string path) => File.Delete(path);
+        internal void Create(string path) => File.CreateText(path).Close();
+
+        internal void Delete(string path) => File.Delete(path);
     }
 }

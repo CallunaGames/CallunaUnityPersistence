@@ -1,9 +1,11 @@
+using Newtonsoft.Json;
+
 namespace Calluna.Persistence
 {
-    public class GameData
+    internal class GameData
     {
-        internal int StructureVersion;
-        internal int Version;
-        internal GameDataEntry[] Entries;
+        [JsonProperty] internal int StructureVersion;
+        [JsonProperty] internal int Version;
+        [JsonProperty] internal GameDataEntry[] Entries;
     }
 }

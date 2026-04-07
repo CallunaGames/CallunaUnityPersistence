@@ -31,6 +31,9 @@ namespace Calluna.Persistence
             _path = Path.Combine(Application.persistentDataPath, _fileName);
         }
 
+        /// <summary>
+        /// Closes open file streams. Called automatically by the Calluna.DI system during cleanup.
+        /// </summary>
         public void Clean()
         {
             ClearStreams();

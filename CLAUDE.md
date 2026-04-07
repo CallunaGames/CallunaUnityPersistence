@@ -54,6 +54,9 @@ Uses `com.calluna.di` with interfaces: `Injectable`, `Initializable`, `Cleanable
 ## Key Conventions
 
 - `DataSaveLoader<TData>` handles boilerplate serialization; concrete subclasses implement `DataId`, `HandleLoadedData`, `GetDefaultData`, and `GetData`.
+- `DataSaveLoader` and `GameDataMigrator` are MonoBehaviours **intentionally** — this allows users to configure serialized fields in the Inspector. They are not scene objects with lifecycle concerns; they function as injectable services whose configuration is authored in the Inspector.
 - `GameDataMigrator` subclasses are MonoBehaviours registered in `GameDataInstaller._migrators`.
 - Serialization always goes through `JsonSerializer` (injectable Newtonsoft wrapper); avoid calling Newtonsoft directly.
+- `TextFileReadWriter` is `internal` — it is an implementation detail of `PersistentDataPathSaveLoader`. Users bind the save loader via `PersistentDataPathSaveLoaderInstaller`, which handles the `TextFileReadWriter` binding internally. Tests access it via `InternalsVisibleTo("Calluna.Persistence.Tests")` declared in `Runtime/AssemblyInfo.cs`.
+- `PlayerPrefsSaveLoaderInstaller` and `PersistentDataPathSaveLoaderInstaller` are the intended entry points for wiring a `SaveLoader`. Users add one of these MonoInstallers to their scene's MonoContext instead of assembling the bindings manually.
 - `PersistentDataPathSaveLoader` uses `JToken` internally (not `string`) to avoid double-escaping; `JsonSerializer.SerializeToToken` / `Deserialize<T>(JToken)` are the appropriate overloads for this path.
