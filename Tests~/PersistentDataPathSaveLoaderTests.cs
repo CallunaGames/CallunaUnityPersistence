@@ -219,6 +219,92 @@ namespace Calluna.Template.Tests
         }
 
         // -----------------------------------------------------------------------
+        // Delete — absent key
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [TestCase("delete_absent_1")]
+        [TestCase("delete_absent_2")]
+        [Description("Delete() on a key that was never saved => no exception thrown, Has() still returns false?")]
+        public void Delete_AbsentKey_NoExceptionAndHasReturnsFalse(string key)
+        {
+            Assert.DoesNotThrow(() => _loader.Delete(key));
+            Assert.That(_loader.Has(key), Is.False);
+        }
+
+        // -----------------------------------------------------------------------
+        // Load — primitive round-trips via JToken
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [TestCase("prim_int_1", 0)]
+        [TestCase("prim_int_2", 42)]
+        [TestCase("prim_int_3", -7)]
+        [Description("Save<int>() then Load<int>() => primitive int round-trips correctly via JToken?")]
+        public void Load_Int_RoundTrip_ReturnsOriginalValue(string key, int value)
+        {
+            _loader.Save(key, value);
+
+            int result = _loader.Load<int>(key);
+
+            Assert.That(result, Is.EqualTo(value));
+        }
+
+        [Test]
+        [TestCase("prim_float_1", 0f)]
+        [TestCase("prim_float_2", 3.14f)]
+        [TestCase("prim_float_3", -1.5f)]
+        [Description("Save<float>() then Load<float>() => primitive float round-trips correctly via JToken?")]
+        public void Load_Float_RoundTrip_ReturnsOriginalValue(string key, float value)
+        {
+            _loader.Save(key, value);
+
+            float result = _loader.Load<float>(key);
+
+            Assert.That(result, Is.EqualTo(value).Within(0.0001f));
+        }
+
+        [Test]
+        [TestCase("prim_bool_true_1")]
+        [TestCase("prim_bool_true_2")]
+        [Description("Save<bool>(true) then Load<bool>() => true round-trips correctly via JToken?")]
+        public void Load_BoolTrue_RoundTrip_ReturnsTrue(string key)
+        {
+            _loader.Save(key, true);
+
+            bool result = _loader.Load<bool>(key);
+
+            Assert.That(result, Is.True);
+        }
+
+        [Test]
+        [TestCase("prim_bool_false_1")]
+        [TestCase("prim_bool_false_2")]
+        [Description("Save<bool>(false) then Load<bool>() => false round-trips correctly via JToken?")]
+        public void Load_BoolFalse_RoundTrip_ReturnsFalse(string key)
+        {
+            _loader.Save(key, false);
+
+            bool result = _loader.Load<bool>(key);
+
+            Assert.That(result, Is.False);
+        }
+
+        [Test]
+        [TestCase("prim_str_1", "hello")]
+        [TestCase("prim_str_2", "world")]
+        [TestCase("prim_str_3", "")]
+        [Description("Save<string>() then Load<string>() => primitive string round-trips correctly via JToken?")]
+        public void Load_String_RoundTrip_ReturnsOriginalValue(string key, string value)
+        {
+            _loader.Save(key, value);
+
+            string result = _loader.Load<string>(key);
+
+            Assert.That(result, Is.EqualTo(value));
+        }
+
+        // -----------------------------------------------------------------------
         // Clean (stream management)
         // -----------------------------------------------------------------------
 

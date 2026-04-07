@@ -352,5 +352,116 @@ namespace Calluna.Template.Tests
                 new VersionedDataMigrator<DataV2>(
                     new VersionedDataMigrationStep[] { new StepV1ToV2(serializer) }));
         }
+
+        // -----------------------------------------------------------------------
+        // VersionedDataMigrator — duplicate TargetVersion silently overwrites
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [TestCase("dup_ver_1", 5)]
+        [TestCase("dup_ver_2", 8)]
+        [Description("VersionedDataMigrator<T> constructor with duplicate TargetVersion steps => last step wins (silently overwrites)?")]
+        public void VersionedDataMigrator_DuplicateTargetVersion_LastStepWins(string key, int xVal)
+        {
+            // Both steps claim TargetVersion == 1. The constructor does NOT throw —
+            // the dictionary assignment silently overwrites. The second step (StepV0ToV1)
+            // transforms X and adds a Label; the first (a no-op version that just copies)
+            // would leave Label null. By asserting Label is set we confirm the later
+            // registration (last in the array) is the one that runs.
+            JsonSerializer serializer = BuildSerializer();
+            PlayerPrefsSaveLoader saveLoader = BuildPlayerPrefsSaveLoader(serializer);
+
+            // "NoOpStep" for v1: copies DataV0 → DataV1 but leaves Label null.
+            VersionedDataMigrationStep noOpStep = new NoOpStepV0ToV1(serializer);
+            // Real step for v1: produces Label = "x=<xVal>".
+            VersionedDataMigrationStep realStep = new StepV0ToV1(serializer);
+
+            // Constructor should not throw for duplicate TargetVersion.
+            VersionedDataMigrator<DataV1> migrator = null;
+            Assert.DoesNotThrow(() =>
+                migrator = new VersionedDataMigrator<DataV1>(
+                    new VersionedDataMigrationStep[] { noOpStep, realStep }));
+
+            // Save DataV0 at version 0.
+            VersionedDataMigrator<DataV0> v0Migrator = new VersionedDataMigrator<DataV0>();
+            VersionedDataSaveLoader writerLoader = BuildVersionedLoader(saveLoader, serializer,
+                new VersionedDataMigrator[] { v0Migrator });
+            writerLoader.Save(key, new DataV0 { X = xVal }, version: 0);
+
+            // Load as DataV1 — the last-registered step for v1 will run.
+            VersionedDataSaveLoader readerLoader = BuildVersionedLoader(saveLoader, serializer,
+                new VersionedDataMigrator[] { migrator });
+
+            DataV1 result = readerLoader.Load<DataV1>(key);
+
+            // The step that was applied last wins: the real step gives Label = "x={xVal}".
+            Assert.That(result, Is.Not.Null);
+            Assert.That(result.Label, Is.EqualTo($"x={xVal}"));
+        }
+
+        // -----------------------------------------------------------------------
+        // VersionedDataSaveLoader.Load<T> — stored version > current version
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [TestCase("future_ver_1", 3, "future")]
+        [TestCase("future_ver_2", 11, "ahead")]
+        [Description("Load<T>() when stored version is greater than migrator current version => data returned unchanged (no crash, no mutation)?")]
+        public void Load_StoredVersionAheadOfCurrent_ReturnsDataUnchanged(string key, int xVal, string label)
+        {
+            // Setup: write DataV2 at version 3 (one ahead of what the reader migrator knows).
+            // The reader migrator has currentVersion=2 (highest TargetVersion=2).
+            // Stored version 3 > currentVersion 2: the Migrate() loop
+            //   "for (int i = version; i < _currentVersion; i++)" never executes
+            //   because 3 < 2 is false → data is returned as-is without modification.
+            JsonSerializer serializer = BuildSerializer();
+            PlayerPrefsSaveLoader saveLoader = BuildPlayerPrefsSaveLoader(serializer);
+
+            VersionedDataMigrator<DataV2> writerMigrator = new VersionedDataMigrator<DataV2>(
+                new VersionedDataMigrationStep[]
+                {
+                    new StepV0ToV1(serializer),
+                    new StepV1ToV2(serializer)
+                });
+            VersionedDataSaveLoader writerLoader = BuildVersionedLoader(saveLoader, serializer,
+                new VersionedDataMigrator[] { writerMigrator });
+
+            // Save at version 3 — above any migrator's current version.
+            DataV2 original = new DataV2 { Label = label, Value = xVal };
+            writerLoader.Save(key, original, version: 3);
+
+            // Reader uses a migrator that only knows up to version 2.
+            VersionedDataMigrator<DataV2> readerMigrator = new VersionedDataMigrator<DataV2>(
+                new VersionedDataMigrationStep[]
+                {
+                    new StepV0ToV1(serializer),
+                    new StepV1ToV2(serializer)
+                });
+            VersionedDataSaveLoader readerLoader = BuildVersionedLoader(saveLoader, serializer,
+                new VersionedDataMigrator[] { readerMigrator });
+
+            DataV2 result = readerLoader.Load<DataV2>(key);
+
+            Assert.That(result, Is.Not.Null);
+            Assert.That(result.Label, Is.EqualTo(label));
+            Assert.That(result.Value, Is.EqualTo(xVal));
+        }
+
+        // -----------------------------------------------------------------------
+        // Helper step: no-op v0→v1 (copies X, leaves Label null)
+        // -----------------------------------------------------------------------
+
+        private class NoOpStepV0ToV1 : VersionedDataMigrationStep
+        {
+            private readonly JsonSerializer _serializer;
+            public NoOpStepV0ToV1(JsonSerializer serializer) => _serializer = serializer;
+            public override int TargetVersion => 1;
+            public override string Migrate(string data)
+            {
+                DataV0 from = _serializer.Deserialize<DataV0>(data);
+                DataV1 to = new DataV1 { X = from.X, Label = null };
+                return _serializer.Serialize(to);
+            }
+        }
     }
 }

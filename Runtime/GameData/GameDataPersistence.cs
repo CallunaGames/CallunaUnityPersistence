@@ -22,9 +22,9 @@ namespace Calluna.Persistence
         private SaveLoader _saveLoader;
         private JsonSerializer _serializer;
 
-        private Dictionary<string, DataSaveLoader> _saveLoaders = new Dictionary<string, DataSaveLoader>();
+        private Dictionary<string, IDataSaveLoader> _saveLoaders = new Dictionary<string, IDataSaveLoader>();
         private Dictionary<string, JToken> _loadedData = new Dictionary<string, JToken>();
-        private List<GameDataMigrator> _migrators;
+        private List<IGameDataMigrator> _migrators;
         private List<GameDataStructureMigrationStep> _structureSteps;
         private readonly Observable<bool> _loadFailed = false;
         private readonly Observable<bool> _dataWasReset = false;
@@ -65,14 +65,14 @@ namespace Calluna.Persistence
 
                 MigrateData(_loadedData, _gameData.Version);
 
-                _saveLoaders = new Dictionary<string, DataSaveLoader>(_arguments.SaveLoaders.Count);
-                foreach (DataSaveLoader loader in _arguments.SaveLoaders)
+                _saveLoaders = new Dictionary<string, IDataSaveLoader>(_arguments.SaveLoaders.Count);
+                foreach (IDataSaveLoader loader in _arguments.SaveLoaders)
                 {
                     if (!_saveLoaders.TryAdd(loader.DataId, loader))
                         throw new InvalidOperationException(
                             $"Duplicate DataSaveLoader id '{loader.DataId}'. Each loader must have a unique DataId.");
                 }
-                foreach (DataSaveLoader saveLoader in _saveLoaders.Values)
+                foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
                     TryLoadData(saveLoader);
             }
             catch (Exception e)
@@ -166,12 +166,12 @@ namespace Calluna.Persistence
         {
             if (_arguments.Migrators == null || _arguments.Migrators.Count == 0)
             {
-                _migrators = new List<GameDataMigrator>(0);
+                _migrators = new List<IGameDataMigrator>(0);
                 return;
             }
 
             ValidateVersions(_arguments.Migrators);
-            _migrators = new List<GameDataMigrator>(_arguments.Migrators);
+            _migrators = new List<IGameDataMigrator>(_arguments.Migrators);
             _migrators.Sort((a, b) => a.Version.CompareTo(b.Version));
         }
 
@@ -179,14 +179,14 @@ namespace Calluna.Persistence
         {
             if (dataVersion >= currentVersion)
                 return;
-            foreach (GameDataMigrator migrator in _migrators)
+            foreach (IGameDataMigrator migrator in _migrators)
             {
                 if (dataVersion < migrator.Version && migrator.Version <= currentVersion)
                     migrator.Migrate(loadedData);
             }
         }
 
-        private void TryLoadData(DataSaveLoader saveLoader)
+        private void TryLoadData(IDataSaveLoader saveLoader)
         {
             try
             {
@@ -207,7 +207,7 @@ namespace Calluna.Persistence
         {
             _collectedData ??= new Dictionary<string, JToken>(_saveLoaders.Count);
             _collectedData.Clear();
-            foreach (DataSaveLoader saveLoader in _saveLoaders.Values)
+            foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
             {
                 if (!_collectedData.TryAdd(saveLoader.DataId, saveLoader.GetSerializedData()))
                     throw new InvalidOperationException(
@@ -237,10 +237,10 @@ namespace Calluna.Persistence
             _saveLoader.Save(_arguments.GameDataId, _gameData);
         }
 
-        private static void ValidateVersions(IReadOnlyList<GameDataMigrator> migrators)
+        private static void ValidateVersions(IReadOnlyList<IGameDataMigrator> migrators)
         {
             HashSet<int> versions = new HashSet<int>(migrators.Count);
-            foreach (GameDataMigrator migrator in migrators)
+            foreach (IGameDataMigrator migrator in migrators)
             {
                 if (migrator.Version <= 0)
                     throw new ArgumentException("Game data migrator version is invalid. It must be greater than 0.");
@@ -253,13 +253,13 @@ namespace Calluna.Persistence
         private GameData CreateDefaultGameData() =>
             new GameData { StructureVersion = CurrentGameDataStructureVersion, Version = currentVersion, Entries = Array.Empty<GameDataEntry>() };
 
-        internal class Arguments
+        public class Arguments
         {
             public string GameDataId;
             public int MinSupportedVersion;
             public int CurrentVersion;
-            public IReadOnlyList<GameDataMigrator> Migrators;
-            public IReadOnlyList<DataSaveLoader> SaveLoaders;
+            public IReadOnlyList<IGameDataMigrator> Migrators;
+            public IReadOnlyList<IDataSaveLoader> SaveLoaders;
         }
     }
 }

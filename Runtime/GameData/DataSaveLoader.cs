@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace Calluna.Persistence
 {
-    public abstract class DataSaveLoader : MonoBehaviour
+    public abstract class DataSaveLoader : MonoBehaviour, IDataSaveLoader
     {
         public abstract string DataId { get; }
         public abstract void Load(JToken value);

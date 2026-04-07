@@ -10,7 +10,7 @@ namespace Calluna.Persistence
     /// This is independent of <see cref="VersionedDataMigrator{T}"/>, which migrates individual typed values
     /// used with <see cref="VersionedDataSaveLoader"/>.
     /// </summary>
-    public abstract class GameDataMigrator : MonoBehaviour, Injectable
+    public abstract class GameDataMigrator : MonoBehaviour, Injectable, IGameDataMigrator
     {
         public abstract int Version { get; }
 

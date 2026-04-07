@@ -19,9 +19,9 @@ namespace Calluna.Persistence
         {
             GameDataPersistence.Arguments arguments = new GameDataPersistence.Arguments()
             {
-                Migrators = _migrators,
+                Migrators = _migrators.ConvertAll(x => (IGameDataMigrator)x),
                 GameDataId = _gameDataId,
-                SaveLoaders = _saveLoaders,
+                SaveLoaders = _saveLoaders.ConvertAll(x => (IDataSaveLoader)x),
                 MinSupportedVersion = _minSupportedVersion,
                 CurrentVersion = _currentVersion
             };

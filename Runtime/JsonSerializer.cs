@@ -33,7 +33,7 @@ namespace Calluna.Persistence
 
         private T Deserialize<T>(JValue jValue)
         {
-            if (jValue.Type == JTokenType.String)
+            if (jValue.Type == JTokenType.String && typeof(T) != typeof(string))
                 return Deserialize<T>(jValue.Value<string>());
             return jValue.ToObject<T>(_jsonSerializer);
         }
