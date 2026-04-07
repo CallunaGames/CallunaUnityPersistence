@@ -84,6 +84,16 @@ public class MyComponent : MonoBehaviour, Injectable
 class VersionedDataSaveLoader : Injectable
 ```
 
+**Public API**
+
+```csharp
+T Load<T>(string id, T defaultValue = default);
+void Save<T>(string id, T value, int version);
+```
+
+- `Load<T>` returns `defaultValue` when no data is stored for the given id. When data is found it is migrated from its stored version to the current version automatically. **Throws `ArgumentException`** if no `VersionedDataMigrator` has been registered for `T` — even when no migration is needed.
+- `Save<T>` serialises `value` and stores it alongside `version` under `id`.
+
 ### Usage
 
 ```csharp
@@ -110,7 +120,9 @@ abstract class VersionedDataMigrationStep
     abstract class VersionedDataMigrationStep<TFrom, TTo> : VersionedDataMigrationStep, Injectable
 ```
 
-Each `VersionedDataMigrationStep` declares its `TargetVersion` and converts from one data shape to the next. Steps are applied in ascending version order until the data reaches the current version.
+Each `VersionedDataMigrationStep` declares its `TargetVersion` and converts from one data shape to the next. Steps are applied in ascending version order until the data reaches the current version. **All version numbers from 1 to the highest `TargetVersion` must be covered** — a gap throws `InvalidOperationException` at construction time.
+
+A `VersionedDataMigrator` must be registered for every type you load via `VersionedDataSaveLoader.Load<T>`, even when no migration steps are needed (pass an empty or `null` step list in that case).
 
 ### Usage
 
@@ -191,9 +203,9 @@ void Save();
 void OverrideSave(Dictionary<string, JToken> data, int version);
 ```
 
-- `Load()` deserialises the saved blob, applies any pending `GameDataMigrator` steps, and dispatches data to each registered `DataSaveLoader`. If the stored version is below `MinSupportedVersion` the entire blob is discarded, defaults are used, and `DataWasReset` fires.
-- `Save()` is a no-op when `LoadingFailed` is `true`.
-- `OverrideSave()` writes a custom data dictionary and version; use with care.
+- `Load()` deserialises the saved blob, applies any pending `GameDataMigrator` steps in ascending version order, and dispatches data to each registered `DataSaveLoader`. If the stored version is below `MinSupportedVersion` the entire blob is discarded, defaults are used, and `DataWasReset` is set to `true`. If any exception is thrown during load, `LoadingFailed` is set to `true`.
+- `Save()` is a no-op when `LoadingFailed` is `true`. If any individual `DataSaveLoader` has a duplicate `DataId`, `Save()` throws.
+- `OverrideSave()` writes a custom data dictionary and version; use with care. Also a no-op when `LoadingFailed` is `true`.
 
 ### GameDataInstaller
 
@@ -255,7 +267,7 @@ public class PlayerSaveLoader : DataSaveLoader<PlayerData>
 
 ### GameDataMigrator
 
-`GameDataMigrator` migrates the raw composite data dictionary when the stored version is older than the current version. Subclass it, assign a `Version`, and register the instance in `GameDataInstaller._migrators`. Use `_serializer.SerializeToToken` when writing modified values back to the dictionary.
+`GameDataMigrator` migrates the raw composite data dictionary when the stored version is older than the current version. Subclass it, assign a `Version`, and register the instance in the **Migrators** list of `GameDataInstaller`. Use `_serializer.SerializeToToken` when writing modified values back to the dictionary. Each migrator's `Version` must be greater than 0 and unique — duplicates throw `ArgumentException` at load time.
 
 **Class hierarchy**
 

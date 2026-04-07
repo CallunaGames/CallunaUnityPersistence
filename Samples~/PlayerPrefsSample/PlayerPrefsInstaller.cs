@@ -16,10 +16,6 @@ namespace Calluna.Persistence.PlayerPrefsSample
         {
             binder.BindToNewSelf<VersionedDataSaveLoader>().AsSingle();
 
-            binder.Bind<SaveLoader>().ToNew<PlayerPrefsSaveLoader>().AsSingle();
-
-            binder.BindToNewSelf<JsonSerializer>().AsSingle();
-
             binder.Bind<IEnumerable<VersionedDataMigrator>>()
                 .To<List<VersionedDataMigrator>>()
                 .FromMethod(CreateDataMigrators)

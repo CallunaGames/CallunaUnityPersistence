@@ -1,5 +1,4 @@
 using System;
-using UnityEngine;
 
 namespace Calluna.Persistence.Samples.FailedGameDataLoading
 {

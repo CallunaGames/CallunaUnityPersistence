@@ -345,6 +345,7 @@ GameObject:
   - component: {fileID: 2068486599}
   - component: {fileID: 2068486598}
   - component: {fileID: 2068486597}
+  - component: {fileID: 2068486602}
   m_Layer: 0
   m_Name: SceneContext
   m_TagString: Untagged
@@ -376,7 +377,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0a9516955777df141b8c29bb61f1be7b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  _fileName: MyData.txt
+  _fileName: FailedGameDataLoading.txt
 --- !u!114 &2068486599
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -392,7 +393,9 @@ MonoBehaviour:
   _migrators: []
   _saveLoaders:
   - {fileID: 2068486597}
-  _gameDataId: __GameData__
+  _gameDataId: FailedGameDataLoading__GameData__
+  _currentVersion: 0
+  _minSupportedVersion: 0
   _loadDataOnInit: 1
   _saveDataOnClean: 1
 --- !u!114 &2068486600
@@ -410,6 +413,7 @@ MonoBehaviour:
   _monoInstallers:
   - {fileID: 2068486599}
   - {fileID: 2068486598}
+  - {fileID: 2068486602}
   _scriptableObjectInstallers: []
   _iD: FailedGameDataLoading
   _parentContextID: 
@@ -428,6 +432,19 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &2068486602
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2068486596}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a47f461306008db4ba943ae4f8438279, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _fileName: FailedGameDataLoading.txt
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

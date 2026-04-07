@@ -185,9 +185,9 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 248121578}
-  - component: {fileID: 248121577}
   - component: {fileID: 248121576}
   - component: {fileID: 248121579}
+  - component: {fileID: 248121580}
   m_Layer: 0
   m_Name: SceneContext
   m_TagString: Untagged
@@ -208,24 +208,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _monoInstallers:
-  - {fileID: 0}
+  - {fileID: 248121580}
   - {fileID: 248121579}
   _scriptableObjectInstallers: []
-  _iD: Sample
+  _iD: ObservablesSample
   _parentContextID: 
---- !u!114 &248121577
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 248121575}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f051f6be8a8cf6648aa0b0334fe0c9d3, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  _fileName: ObservablesSampleData.txt
 --- !u!4 &248121578
 Transform:
   m_ObjectHideFlags: 0
@@ -256,10 +243,23 @@ MonoBehaviour:
   _migrators: []
   _saveLoaders: []
   _gameDataId: ObservablesSample__GameData__
-  _currentVersion: 1
-  _minSupportedVersion: 1
+  _currentVersion: 0
+  _minSupportedVersion: 0
   _loadDataOnInit: 1
   _saveDataOnClean: 1
+--- !u!114 &248121580
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 248121575}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a47f461306008db4ba943ae4f8438279, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _fileName: ObservablesSample.txt
 --- !u!1 &475041037
 GameObject:
   m_ObjectHideFlags: 0
