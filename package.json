@@ -1,12 +1,12 @@
 {
   "name": "com.calluna.persistence",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "displayName": "Calluna Unity Persistence",
   "description": "Handles serialization, versioning, saving and loading of data",
   "unity": "6000.33",
   "unityRelease": "",
   "documentationUrl": "https://github.com/CallunaGames/CallunaUnityPersistence",
-  "changelogUrl": "https://github.com/CallunaGames/CallunaUnityPersistence/compare/v1.4.0...v1.5.0",
+  "changelogUrl": "https://github.com/CallunaGames/CallunaUnityPersistence/compare/v1.5.0...v1.6.0",
   "licensesUrl": "",
   "dependencies": {
     "com.calluna.core": "https://github.com/CallunaGames/CallunaUnityCore.git#v1.2.0",
@@ -38,6 +38,11 @@
       "displayName": "Observables Sample",
       "description": "Sample for subscribing to LoadingFailed, DataWasReset, and SaveLoader.OnClear",
       "path": "Samples~/ObservablesSample"
+    },
+    {
+      "displayName": "SQLite Sample",
+      "description": "Sample for saving and loading data using the SQLite backend",
+      "path": "Samples~/SqliteSample"
     }
   ],
   "keywords": [
@@ -48,7 +53,8 @@
     "migration",
     "versioning",
     "playerprefs",
-    "gamedata"
+    "gamedata",
+    "sqlite"
   ],
   "author": {
     "name": "Calluna Games",
