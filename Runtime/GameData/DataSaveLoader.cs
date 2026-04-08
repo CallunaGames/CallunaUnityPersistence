@@ -10,6 +10,12 @@ namespace Calluna.Persistence
         public abstract void Load(JToken value);
         public abstract void LoadDefault();
         public abstract JToken GetSerializedData();
+
+        /// <inheritdoc cref="IDataSaveLoader.IsDirty"/>
+        public virtual bool IsDirty => true;
+
+        /// <inheritdoc cref="IDataSaveLoader.MarkClean"/>
+        public virtual void MarkClean() { }
     }
 
     public abstract class DataSaveLoader<TData> : DataSaveLoader, Injectable

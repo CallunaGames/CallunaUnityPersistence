@@ -1,3 +1,17 @@
+## [1.6.0] - 2026-04-08
+
+### Breaking Changes
+- `GameDataPersistence` no longer stores all save data as a single JSON blob. Each `DataSaveLoader` is now saved as its own key in the underlying `SaveLoader`, and the data version is stored under the reserved key `__version__`. Existing save files in the old single-blob format are automatically migrated to the new format on the first `Load()` call — no data loss occurs. The `GameDataId` field on `GameDataInstaller` must still match the value used before upgrading so the migration can find the old blob.
+- `GameDataPersistence.OverrideSave` now writes each entry in the supplied dictionary as its own key and writes the version under `__version__`, rather than saving a single `GameData` blob.
+
+### Added
+- `SqliteSaveLoader`: a new `SaveLoader` backed by a local SQLite database. Uses sqlite-net (MIT, included as source in `Runtime/ThirdParty/SQLite.cs`) and the native sqlite3 library. The native `sqlite3.dll` for Windows x64 is bundled with this package; macOS, Linux, iOS, and Android provide sqlite3 as a system library. Each key-value pair is a separate row, so only rows for changed data are written on each save. Not supported on WebGL.
+- `SqliteSaveLoaderInstaller`: a `MonoInstaller` that binds `SqliteSaveLoader`. Configure the database file name via the `File Name` Inspector field (default: `SaveData.db`).
+- `IDataSaveLoader.IsDirty` (default: `true`) and `IDataSaveLoader.MarkClean()` (default: no-op): opt-in dirty tracking. `GameDataPersistence.Save()` skips serialization for loaders that report `IsDirty == false`, reducing CPU overhead when most data has not changed. All loaders are marked clean after a successful save. Existing `IDataSaveLoader` implementations are unaffected — the defaults preserve always-dirty behaviour.
+- `DataSaveLoader.IsDirty` and `DataSaveLoader.MarkClean()` are exposed as `virtual` so `MonoBehaviour`-based subclasses can `override` them with standard C# syntax to opt into dirty tracking.
+- `GameDataPersistence.Save()` now collects serialized data from all dirty loaders before writing anything. If any `GetSerializedData()` call throws, no data is written to storage, preventing partial saves that would leave data in an inconsistent state.
+- SQLite sample (`Samples~/SqliteSample`) demonstrating save, load, and clear via `SqliteSaveLoader`.
+
 ## [1.5.0] - 2026-04-07
 
 ### Breaking Changes

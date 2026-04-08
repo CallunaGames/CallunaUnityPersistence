@@ -1,6 +1,6 @@
 # Calluna Unity Persistence
 
-A Unity UPM package for game data persistence. Provides serialization, versioning, and migration of save data with two storage backends: PlayerPrefs and persistent data path (file-based).
+A Unity UPM package for game data persistence. Provides serialization, versioning, and migration of save data with three storage backends: PlayerPrefs, persistent data path (file-based), and SQLite.
 
 ---
 
@@ -14,9 +14,11 @@ A Unity UPM package for game data persistence. Provides serialization, versionin
 interface SaveLoader
     class PlayerPrefsSaveLoader : SaveLoader, Injectable
     class PersistentDataPathSaveLoader : SaveLoader, Injectable, Cleanable
+    class SqliteSaveLoader : SaveLoader, Injectable, Cleanable
 
 class PlayerPrefsSaveLoaderInstaller : MonoInstaller
 class PersistentDataPathSaveLoaderInstaller : MonoInstaller
+class SqliteSaveLoaderInstaller : MonoInstaller
 ```
 
 **Interface**
@@ -45,6 +47,16 @@ Use `PlayerPrefsSaveLoaderInstaller` to wire it. Add the MonoBehaviour to your s
 Stores all data as a `Dictionary<string, JToken>` in a single JSON file under `Application.persistentDataPath`. File streams are kept open for performance and closed when `Clean()` is called.
 
 Use `PersistentDataPathSaveLoaderInstaller` to wire it. Add the MonoBehaviour to your scene's MonoContext and set the **File Name** field in the Inspector (default: `SaveData.txt`).
+
+### SqliteSaveLoader
+
+Stores each key-value pair as a separate row in a local SQLite database under `Application.persistentDataPath`. Because each key has its own row, only the rows that actually change need to be written on each save — no full-file rewrite.
+
+Use `SqliteSaveLoaderInstaller` to wire it. Add the MonoBehaviour to your scene's MonoContext and set the **File Name** field in the Inspector (default: `SaveData.db`). The file name must end in `.db`, `.sqlite`, `.sqlite3`, or `.db3` — if no extension is provided, `.db` is appended automatically.
+
+**Bundled dependencies:** the native `sqlite3.dll` for Windows x64 is included in `Runtime/Plugins/`. On macOS, Linux, iOS, and Android, the system sqlite3 library is used automatically. **WebGL is not supported.**
+
+---
 
 ### Usage
 
@@ -180,7 +192,9 @@ If you are using the `GameData` system, always use `GameDataMigrator`. If you ar
 
 ## GameData System
 
-The `GameData` system is the high-level persistence layer. It aggregates data from multiple `DataSaveLoader` instances into a single versioned save blob. Use it when your game has multiple distinct data domains that must be saved, loaded, and migrated together.
+The `GameData` system is the high-level persistence layer. It coordinates multiple `DataSaveLoader` instances, each stored under its own key in the underlying `SaveLoader`. The reserved key `__version__` stores the current data version. Use it when your game has multiple distinct data domains that must be saved, loaded, and migrated together.
+
+> **Upgrading from v1.5?** The old single-blob format is automatically detected and migrated to the new per-key format on the first `Load()` call — no data is lost. Make sure the **Game Data Id** field in `GameDataInstaller` still matches the value you had before upgrading.
 
 ### GameDataPersistence
 
@@ -203,9 +217,9 @@ void Save();
 void OverrideSave(Dictionary<string, JToken> data, int version);
 ```
 
-- `Load()` deserialises the saved blob, applies any pending `GameDataMigrator` steps in ascending version order, and dispatches data to each registered `DataSaveLoader`. If the stored version is below `MinSupportedVersion` the entire blob is discarded, defaults are used, and `DataWasReset` is set to `true`. If any exception is thrown during load, `LoadingFailed` is set to `true`.
-- `Save()` is a no-op when `LoadingFailed` is `true`. If any individual `DataSaveLoader` has a duplicate `DataId`, `Save()` throws.
-- `OverrideSave()` writes a custom data dictionary and version; use with care. Also a no-op when `LoadingFailed` is `true`.
+- `Load()` loads each `DataSaveLoader`'s key individually, applies any pending `GameDataMigrator` steps in ascending version order, and dispatches data to each loader. If the stored version is below `MinSupportedVersion` all data is discarded, defaults are used, and `DataWasReset` is set to `true`. If any exception is thrown during load, `LoadingFailed` is set to `true`.
+- `Save()` is a no-op when `LoadingFailed` is `true`. Only loaders where `IsDirty == true` are serialised. All dirty loaders are serialised before anything is written — if any serialisation fails the entire write is aborted, leaving storage unchanged. After a successful write, `MarkClean()` is called on every loader.
+- `OverrideSave()` writes each entry in the supplied dictionary as its own key and updates `__version__`; use with care. Also a no-op when `LoadingFailed` is `true`.
 
 ### GameDataInstaller
 
@@ -215,7 +229,7 @@ void OverrideSave(Dictionary<string, JToken> data, int version);
 
 | Field | Default | Description |
 |---|---|---|
-| Game Data Id | `__GameData__` | The key used to store the blob in the underlying `SaveLoader`. |
+| Game Data Id | `__GameData__` | The key used to detect and migrate legacy single-blob save data from v1.5 and earlier. Must match the value that was set before upgrading. |
 | Current Version | `0` | The version number written on every `Save()`. |
 | Min Supported Version | `0` | Saves below this version are discarded and data is reset. |
 | Migrators | *(empty)* | `GameDataMigrator` MonoBehaviours applied on `Load()`. |
@@ -230,17 +244,38 @@ void OverrideSave(Dictionary<string, JToken> data, int version);
 **Class hierarchy**
 
 ```
-abstract class DataSaveLoader : MonoBehaviour
-    abstract class DataSaveLoader<TData> : DataSaveLoader, Injectable
+interface IDataSaveLoader
+    abstract class DataSaveLoader : MonoBehaviour, IDataSaveLoader
+        abstract class DataSaveLoader<TData> : DataSaveLoader, Injectable
 ```
 
 **Members to implement**
 
 ```csharp
-public abstract string DataId { get; }           // unique key within the GameData blob
-protected abstract TData GetDefaultData();        // returned when no saved data exists
-protected abstract void HandleLoadedData(TData data); // called after deserialisation
-protected abstract TData GetData();               // called on every Save()
+public abstract string DataId { get; }                    // unique key within GameData
+protected abstract TData GetDefaultData();                 // returned when no saved data exists
+protected abstract void HandleLoadedData(TData data);      // called after deserialisation
+protected abstract TData GetData();                        // called on every dirty Save()
+```
+
+**Optional dirty tracking**
+
+By default `IsDirty` returns `true` so every `Save()` serialises the loader. To opt in to incremental saves, override `IsDirty` and `MarkClean()` with your own flag and set it to `true` whenever data changes:
+
+```csharp
+public class PlayerSaveLoader : DataSaveLoader<PlayerData>
+{
+    private bool _isDirty = true;
+    public override bool IsDirty => _isDirty;
+    public override void MarkClean() => _isDirty = false;
+
+    public int Score
+    {
+        get => _data.Score;
+        set { _data.Score = value; _isDirty = true; }
+    }
+    // ...
+}
 ```
 
 **Usage**
