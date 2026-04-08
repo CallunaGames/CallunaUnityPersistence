@@ -1,0 +1,17 @@
+{
+    "name": "Calluna.Persistence.Samples.Sqlite",
+    "rootNamespace": "Calluna.Persistence.Samples.Sqlite",
+    "references": [
+        "Calluna.DI",
+        "Calluna.Persistence"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
