@@ -361,7 +361,7 @@ namespace Calluna.Persistence
             }
         }
 
-        public class Arguments
+        internal class Arguments
         {
             /// <summary>
             /// Key used to detect and migrate legacy single-blob save data (v1.5 and earlier).

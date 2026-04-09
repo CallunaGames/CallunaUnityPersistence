@@ -214,6 +214,16 @@ namespace Calluna.Template.Tests
             Assert.That(_loader.Has(key), Is.False);
         }
 
+        [Test]
+        [TestCase("never_saved_key_a")]
+        [TestCase("never_saved_key_b")]
+        [Description("Delete() on a key that was never saved => no exception thrown, Has() still returns false?")]
+        public void Delete_NeverSavedKey_DoesNotThrowAndHasReturnsFalse(string key)
+        {
+            Assert.DoesNotThrow(() => _loader.Delete(key));
+            Assert.That(_loader.Has(key), Is.False);
+        }
+
         // -----------------------------------------------------------------------
         // Clear
         // -----------------------------------------------------------------------

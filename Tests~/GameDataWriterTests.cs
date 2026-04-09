@@ -286,6 +286,53 @@ namespace Calluna.Template.Tests
         }
 
         // -----------------------------------------------------------------------
+        // CommitToStorage — null snapshot writes only the version key
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [Description("CommitToStorage with a null snapshot (no dirty loaders) => only the version key is written, no exception?")]
+        public void CommitToStorage_NullSnapshot_OnlyVersionKeyWritten()
+        {
+            FakeSaveLoader saveLoader = new FakeSaveLoader();
+            GameDataWriter writer = BuildWriter(saveLoader, gameDataId: "nullSnapshotGame", currentVersion: 3);
+
+            Assert.DoesNotThrow(() => writer.CommitToStorage(null));
+
+            Assert.That(saveLoader.Has(GameDataPersistence.VersionKey), Is.True);
+            // The game-data id itself must NOT have been written as a data entry.
+            Assert.That(saveLoader.Has("nullSnapshotGame"), Is.False);
+        }
+
+        // -----------------------------------------------------------------------
+        // SaveAsync — background write failure => task completes without rethrowing
+        // -----------------------------------------------------------------------
+
+        private class ThrowingSaveLoader : SaveLoader
+        {
+            public event Action OnClear;
+            private readonly Dictionary<string, string> _store = new Dictionary<string, string>();
+
+            public bool Has(string id) => _store.ContainsKey(id);
+            public T Load<T>(string id, T defaultValue = default) => defaultValue;
+            public void Save<T>(string id, T value) =>
+                throw new InvalidOperationException("Simulated background write failure");
+            public void Delete(string id) => _store.Remove(id);
+            public void Clear() { _store.Clear(); OnClear?.Invoke(); }
+        }
+
+        [Test]
+        [Description("SaveAsync background write failure => task completes without rethrowing, error is logged?")]
+        public void SaveAsync_BackgroundWriteFailure_TaskCompletesAndErrorLogged()
+        {
+            ThrowingSaveLoader saveLoader = new ThrowingSaveLoader();
+            GameDataWriter writer = BuildWriter(saveLoader, gameDataId: "bgFailGame");
+
+            LogAssert.Expect(LogType.Error, new Regex("SaveAsync failed for game data"));
+            LogAssert.Expect(LogType.Exception, new Regex("InvalidOperationException"));
+            Assert.DoesNotThrow(() => writer.SaveAsync(MakeSnapshot("bgData")).GetAwaiter().GetResult());
+        }
+
+        // -----------------------------------------------------------------------
         // FlushPendingWrite — no pending write
         // -----------------------------------------------------------------------
 

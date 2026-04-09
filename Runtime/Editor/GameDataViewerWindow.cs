@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace Calluna.Persistence.Editor
 {
-    public class GameDataViewerWindow : EditorWindow
+    internal class GameDataViewerWindow : EditorWindow
     {
         private const string _defaultKey = "__GameData__";
 

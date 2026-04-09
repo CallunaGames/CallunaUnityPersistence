@@ -122,7 +122,7 @@ namespace Calluna.Persistence
             if (File.Exists(path + "-shm")) File.Delete(path + "-shm");
         }
 
-        public class Arguments
+        internal class Arguments
         {
             public string FileName;
 

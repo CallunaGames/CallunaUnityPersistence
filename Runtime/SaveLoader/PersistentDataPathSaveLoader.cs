@@ -106,7 +106,7 @@ namespace Calluna.Persistence
             _streams.Item3 = null;
         }
 
-        public class Arguments
+        internal class Arguments
         {
             public string FileName;
         }
