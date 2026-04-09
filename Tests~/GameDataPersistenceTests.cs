@@ -131,6 +131,22 @@ namespace Calluna.Template.Tests
             return serializer;
         }
 
+        private static GameDataWriter BuildWriter(SaveLoader saveLoader, string gameDataId, int currentVersion)
+        {
+            Mock<Resolver> r = new Mock<Resolver>();
+            r.Setup(x => x.Resolve<SaveLoader>()).Returns(saveLoader);
+            r.Setup(x => x.Resolve<GameDataWriter.Arguments>()).Returns(
+                new GameDataWriter.Arguments
+                {
+                    GameDataId = gameDataId,
+                    CurrentVersion = currentVersion,
+                });
+
+            GameDataWriter writer = new GameDataWriter();
+            ((Injectable)writer).Inject(r.Object);
+            return writer;
+        }
+
         private static GameDataPersistence BuildPersistence(
             FakeSaveLoader saveLoader,
             JsonSerializer serializer,
@@ -140,9 +156,12 @@ namespace Calluna.Template.Tests
             IReadOnlyList<IDataSaveLoader> dataLoaders,
             IReadOnlyList<IGameDataMigrator> migrators = null)
         {
+            GameDataWriter writer = BuildWriter(saveLoader, gameDataId, currentVersion);
+
             Mock<Resolver> r = new Mock<Resolver>();
             r.Setup(x => x.Resolve<SaveLoader>()).Returns(saveLoader);
             r.Setup(x => x.Resolve<JsonSerializer>()).Returns(serializer);
+            r.Setup(x => x.Resolve<GameDataWriter>()).Returns(writer);
             r.Setup(x => x.Resolve<GameDataPersistence.Arguments>()).Returns(
                 new GameDataPersistence.Arguments
                 {
@@ -612,6 +631,169 @@ namespace Calluna.Template.Tests
 
             Assert.That(persistence.LoadingFailed.Value, Is.False);
             Assert.That(persistence.DataWasReset.Value, Is.False);
+        }
+
+        // -----------------------------------------------------------------------
+        // Load — migrator with version 0 => LoadingFailed becomes true
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [TestCase("gdp_migver0_1")]
+        [TestCase("gdp_migver0_2")]
+        [Description("Load() with a migrator whose Version is 0 => LoadingFailed becomes true (ValidateVersions throws ArgumentException)?")]
+        public void Load_MigratorVersionIsZero_LoadingFailedBecomesTrue(string gameDataId)
+        {
+            JsonSerializer serializer = BuildSerializer();
+            FakeSaveLoader saveLoader = new FakeSaveLoader();
+            StubDataSaveLoader loader = new StubDataSaveLoader("anyData");
+
+            StubGameDataMigrator badMigrator = new StubGameDataMigrator(version: 0);
+
+            GameDataPersistence persistence = BuildPersistence(
+                saveLoader, serializer, gameDataId, 0, 1,
+                new IDataSaveLoader[] { loader },
+                new IGameDataMigrator[] { badMigrator });
+
+            LogAssert.Expect(LogType.Error, new Regex("Failed to load game data"));
+            LogAssert.Expect(LogType.Exception, new Regex("ArgumentException"));
+            persistence.Load();
+
+            Assert.That(persistence.LoadingFailed.Value, Is.True);
+        }
+
+        // -----------------------------------------------------------------------
+        // Load — two migrators with duplicate version => LoadingFailed becomes true
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [TestCase("gdp_migdup_1")]
+        [TestCase("gdp_migdup_2")]
+        [Description("Load() with two migrators sharing the same Version => LoadingFailed becomes true?")]
+        public void Load_DuplicateMigratorVersion_LoadingFailedBecomesTrue(string gameDataId)
+        {
+            JsonSerializer serializer = BuildSerializer();
+            FakeSaveLoader saveLoader = new FakeSaveLoader();
+            StubDataSaveLoader loader = new StubDataSaveLoader("anyData");
+
+            StubGameDataMigrator migratorA = new StubGameDataMigrator(version: 2);
+            StubGameDataMigrator migratorB = new StubGameDataMigrator(version: 2);
+
+            GameDataPersistence persistence = BuildPersistence(
+                saveLoader, serializer, gameDataId, 0, 2,
+                new IDataSaveLoader[] { loader },
+                new IGameDataMigrator[] { migratorA, migratorB });
+
+            LogAssert.Expect(LogType.Error, new Regex("Failed to load game data"));
+            LogAssert.Expect(LogType.Exception, new Regex("ArgumentException"));
+            persistence.Load();
+
+            Assert.That(persistence.LoadingFailed.Value, Is.True);
+        }
+
+        // -----------------------------------------------------------------------
+        // Load — individual DataSaveLoader.Load(JToken) throws => LoadDefault called, LoadingFailed stays false
+        // -----------------------------------------------------------------------
+
+        private class ThrowingLoadStub : IDataSaveLoader
+        {
+            public string DataId { get; }
+            public bool LoadDefaultCalled;
+
+            public ThrowingLoadStub(string id) => DataId = id;
+
+            public void Load(JToken value) =>
+                throw new InvalidOperationException("Simulated per-loader load failure");
+
+            public void LoadDefault() => LoadDefaultCalled = true;
+
+            public JToken GetSerializedData() => JToken.FromObject(new { value = 1 });
+        }
+
+        [Test]
+        [TestCase("gdp_loaderload_throws_1")]
+        [TestCase("gdp_loaderload_throws_2")]
+        [Description("Load() when an individual DataSaveLoader.Load(JToken) throws => LoadDefault() is called for that loader and LoadingFailed stays false?")]
+        public void Load_IndividualLoaderLoadThrows_LoadDefaultCalledAndLoadingFailedStaysFalse(string gameDataId)
+        {
+            JsonSerializer serializer = BuildSerializer();
+            FakeSaveLoader saveLoader = new FakeSaveLoader();
+            ThrowingLoadStub throwingLoader = new ThrowingLoadStub("throwData");
+
+            // First, write data so the throwing loader's key exists and Load(JToken) is actually called.
+            StubDataSaveLoader seedLoader = new StubDataSaveLoader("throwData")
+            {
+                SerializedValue = JToken.FromObject(new { value = 7 })
+            };
+            GameDataPersistence seeder = BuildPersistence(
+                saveLoader, serializer, gameDataId, 0, 1,
+                new IDataSaveLoader[] { seedLoader });
+            seeder.Load();
+            seeder.Save();
+
+            GameDataPersistence persistence = BuildPersistence(
+                saveLoader, serializer, gameDataId, 0, 1,
+                new IDataSaveLoader[] { throwingLoader });
+
+            LogAssert.Expect(LogType.Error, new Regex("Failed to load data for 'throwData'"));
+            LogAssert.Expect(LogType.Exception, new Regex("InvalidOperationException"));
+            persistence.Load();
+
+            Assert.That(throwingLoader.LoadDefaultCalled, Is.True);
+            Assert.That(persistence.LoadingFailed.Value, Is.False);
+        }
+
+        // -----------------------------------------------------------------------
+        // SaveAsync — when LoadingFailed is true => returns immediately, no write
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [TestCase("gdp_saveasync_noop_1")]
+        [TestCase("gdp_saveasync_noop_2")]
+        [Description("SaveAsync() when LoadingFailed is true => returns immediately, no write to SaveLoader?")]
+        public void SaveAsync_WhenLoadingFailed_ReturnsImmediatelyNoWrite(string gameDataId)
+        {
+            JsonSerializer serializer = BuildSerializer();
+            FakeSaveLoader saveLoader = new FakeSaveLoader { ThrowOnLoad = true };
+
+            GameDataPersistence persistence = BuildPersistence(
+                saveLoader, serializer, gameDataId, 0, 1,
+                new IDataSaveLoader[] { new StubDataSaveLoader("failData") });
+
+            LogAssert.Expect(LogType.Error, new Regex("Failed to load game data"));
+            LogAssert.Expect(LogType.Exception, new Regex("InvalidOperationException"));
+            persistence.Load();
+
+            saveLoader.ThrowOnLoad = false;
+            LogAssert.Expect(LogType.Error, new Regex("SaveAsync was aborted"));
+            persistence.SaveAsync().GetAwaiter().GetResult();
+
+            Assert.That(saveLoader.Has(GameDataPersistence.VersionKey), Is.False);
+        }
+
+        // -----------------------------------------------------------------------
+        // SaveAsync — when GetSerializedData() throws => logs error, nothing written
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [TestCase("gdp_saveasync_throw_1")]
+        [TestCase("gdp_saveasync_throw_2")]
+        [Description("SaveAsync() when GetSerializedData() throws => logs error, nothing written?")]
+        public void SaveAsync_SerializationThrows_LogsErrorAndNothingWritten(string gameDataId)
+        {
+            JsonSerializer serializer = BuildSerializer();
+            FakeSaveLoader saveLoader = new FakeSaveLoader();
+            ThrowingStub throwingLoader = new ThrowingStub("badAsyncData");
+
+            GameDataPersistence persistence = BuildPersistence(
+                saveLoader, serializer, gameDataId, 0, 1,
+                new IDataSaveLoader[] { throwingLoader });
+            persistence.Load();
+
+            LogAssert.Expect(LogType.Error, new Regex("Failed to serialize game data"));
+            LogAssert.Expect(LogType.Exception, new Regex("InvalidOperationException"));
+            persistence.SaveAsync().GetAwaiter().GetResult();
+
+            Assert.That(saveLoader.Has(GameDataPersistence.VersionKey), Is.False);
         }
 
         // -----------------------------------------------------------------------

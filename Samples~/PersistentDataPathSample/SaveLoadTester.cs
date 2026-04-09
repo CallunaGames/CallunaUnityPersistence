@@ -36,6 +36,7 @@ namespace Calluna.Persistence.Samples.PersistentDataPath
         {
             _saveButton.onClick.RemoveListener(Save);
             _loadButton.onClick.RemoveListener(Load);
+            _clearButton.onClick.RemoveListener(Clear);
         }
 
         private void Save()

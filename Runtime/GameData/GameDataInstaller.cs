@@ -26,6 +26,14 @@ namespace Calluna.Persistence
                 CurrentVersion = _currentVersion
             };
             
+            binder.BindToNewSelf<GameDataWriter>()
+                .WithArgument(new GameDataWriter.Arguments
+                {
+                    GameDataId = _gameDataId,
+                    CurrentVersion = _currentVersion,
+                })
+                .AsSingle();
+
             binder.BindToNewSelf<GameDataPersistence>()
                 .WithArgument(arguments)
                 .AsSingle()

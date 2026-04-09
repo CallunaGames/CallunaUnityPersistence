@@ -52,7 +52,15 @@ Use `PersistentDataPathSaveLoaderInstaller` to wire it. Add the MonoBehaviour to
 
 Stores each key-value pair as a separate row in a local SQLite database under `Application.persistentDataPath`. Because each key has its own row, only the rows that actually change need to be written on each save — no full-file rewrite.
 
-Use `SqliteSaveLoaderInstaller` to wire it. Add the MonoBehaviour to your scene's MonoContext and set the **File Name** field in the Inspector (default: `SaveData.db`). The file name must end in `.db`, `.sqlite`, `.sqlite3`, or `.db3` — if no extension is provided, `.db` is appended automatically.
+Use `SqliteSaveLoaderInstaller` to wire it. Add the MonoBehaviour to your scene's MonoContext and configure it in the Inspector.
+
+**Inspector fields**
+
+| Field | Default | Description |
+|---|---|---|
+| File Name | `SaveData.db` | Database file name. Must end in `.db`, `.sqlite`, `.sqlite3`, or `.db3`. If no extension is provided, `.db` is appended automatically. |
+| Full Mutex | `false` | Opens the connection with `SQLITE_OPEN_FULLMUTEX` so it is safe to use from multiple threads. **Enable this when using `GameDataPersistence.SaveAsync()`.** |
+| Synchronous Off | `false` | Sets `PRAGMA synchronous=OFF`, removing WAL frame syncing. Reduces per-transaction overhead from ~2 ms to ~0.1 ms at the cost of potential data loss on OS crash or power failure. Safe on normal application exit or crash. |
 
 **Bundled dependencies:** the native `sqlite3.dll` for Windows x64 is included in `Runtime/Plugins/`. On macOS, Linux, iOS, and Android, the system sqlite3 library is used automatically. **WebGL is not supported.**
 
@@ -214,12 +222,48 @@ ReadonlyObservable<bool> DataWasReset  { get; }
 
 void Load();
 void Save();
+Task SaveAsync();
+void FlushPendingWrite();
 void OverrideSave(Dictionary<string, JToken> data, int version);
 ```
 
 - `Load()` loads each `DataSaveLoader`'s key individually, applies any pending `GameDataMigrator` steps in ascending version order, and dispatches data to each loader. If the stored version is below `MinSupportedVersion` all data is discarded, defaults are used, and `DataWasReset` is set to `true`. If any exception is thrown during load, `LoadingFailed` is set to `true`.
 - `Save()` is a no-op when `LoadingFailed` is `true`. Only loaders where `IsDirty == true` are serialised. All dirty loaders are serialised before anything is written — if any serialisation fails the entire write is aborted, leaving storage unchanged. After a successful write, `MarkClean()` is called on every loader.
+- `SaveAsync()` serialises dirty loaders on the calling (main) thread, then dispatches the write to a background thread so the caller is not blocked by I/O. Fire-and-forget is safe; await the returned `Task` only if you need to react to completion. **Dirty flags are not cleared after an async save** — the final synchronous `Save()` on DI cleanup handles that. Falls back to a synchronous write (with a one-time warning) when the underlying `SaveLoader` requires main-thread access (e.g. `PlayerPrefsSaveLoader`) or the platform does not support background threads (WebGL). When using `SqliteSaveLoader` with `SaveAsync()`, enable the **Full Mutex** toggle in `SqliteSaveLoaderInstaller`.
+- `FlushPendingWrite()` blocks the calling thread until any in-progress background write started by `SaveAsync()` completes. Called automatically by the DI cleanup path before the final `Save()`, so no write is lost on scene teardown. You only need to call this manually if you are managing the DI lifecycle yourself.
 - `OverrideSave()` writes each entry in the supplied dictionary as its own key and updates `__version__`; use with care. Also a no-op when `LoadingFailed` is `true`.
+
+### Usage — async saves
+
+Call `SaveAsync()` from a MonoBehaviour (e.g. in response to a game event) to offload the disk write to a background thread. The `Save Data On Clean` path in `GameDataInstaller` will flush any pending write and perform a final synchronous save on scene teardown automatically.
+
+```csharp
+public class AutoSaveTrigger : MonoBehaviour, Injectable
+{
+    private GameDataPersistence _persistence;
+
+    public void Inject(Resolver resolver)
+    {
+        _persistence = resolver.Resolve<GameDataPersistence>();
+    }
+
+    // Called when the player clears a level, enters a safe zone, etc.
+    public void TriggerAutoSave()
+    {
+        // Fire-and-forget: I/O runs on a background thread.
+        _ = _persistence.SaveAsync();
+    }
+
+    // Await the Task if you need to react to completion:
+    public async void TriggerAutoSaveAndShowIndicator()
+    {
+        await _persistence.SaveAsync();
+        ShowSaveCompleteIndicator();
+    }
+}
+```
+
+> **SQLite + async:** enable **Full Mutex** in `SqliteSaveLoaderInstaller` whenever `SaveAsync()` is used, so the connection is safe to access from the background write thread.
 
 ### GameDataInstaller
 
@@ -401,3 +445,4 @@ The following samples are available in the Package Manager under **Samples**.
 | **Game Data Sample** | Demonstrates the full `GameData` system with multiple `DataSaveLoader` instances and `GameDataMigrator` steps. |
 | **Failed Game Data Loading Sample** | Demonstrates how `GameDataPersistence.LoadingFailed` and `DataWasReset` observables behave when loading encounters an error or an unsupported version. |
 | **Observables Sample** | Demonstrates subscribing to `GameDataPersistence.LoadingFailed`, `DataWasReset`, and `SaveLoader.OnClear` to react to persistence state changes at runtime. |
+| **SQLite Sample** | Demonstrates `SqliteSaveLoader` as the persistence backend, including the `Full Mutex` and `Synchronous Off` Inspector settings. |

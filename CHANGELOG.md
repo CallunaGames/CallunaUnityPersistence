@@ -1,3 +1,14 @@
+## [1.7.0] - 2026-04-09
+
+### Added
+- `GameDataPersistence.SaveAsync()`: serializes all dirty loaders on the calling (main) thread, then writes the resulting data to storage on a background thread. Call this instead of `Save()` to avoid stalling the game loop during I/O.
+- `GameDataPersistence.FlushPendingWrite()`: blocks the calling thread until any in-flight background write started by `SaveAsync()` has completed. Use this before quitting or loading a new scene to ensure data is fully persisted.
+- `SqliteSaveLoader` now supports a `SynchronousOff` connection option (`PRAGMA synchronous=OFF`), reducing fsync overhead for faster writes when full durability guarantees are not required.
+- SQLite sample (`Samples~/SqliteSample`) demonstrating save, load, and clear via `SqliteSaveLoader`.
+
+### Fixed
+- `PersistentDataPathSample/SaveLoadTester` was not unregistering its `Clear` button listener in `Clean()`, causing a stale callback to remain after the component was torn down.
+
 ## [1.6.0] - 2026-04-08
 
 ### Breaking Changes
