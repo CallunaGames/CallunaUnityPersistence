@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Calluna.DI;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
@@ -26,6 +27,7 @@ namespace Calluna.Persistence
         private Arguments _arguments;
         private SaveLoader _saveLoader;
         private JsonSerializer _serializer;
+        private GameDataWriter _writer;
 
         private Dictionary<string, IDataSaveLoader> _saveLoaders = new Dictionary<string, IDataSaveLoader>();
         private List<IGameDataMigrator> _migrators;
@@ -44,6 +46,7 @@ namespace Calluna.Persistence
             _arguments = resolver.Resolve<Arguments>();
             _saveLoader = resolver.Resolve<SaveLoader>();
             _serializer = resolver.Resolve<JsonSerializer>();
+            _writer = resolver.Resolve<GameDataWriter>();
 
             // Structure migration steps are only used when reading the legacy single-blob format
             // produced by versions prior to v1.6. Add a new step here if the blob schema changes.
@@ -71,7 +74,6 @@ namespace Calluna.Persistence
 
                 if (!_saveLoader.Has(VersionKey))
                 {
-                    // No saved data at all — load defaults for all loaders.
                     foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
                         saveLoader.LoadDefault();
                     return;
@@ -89,20 +91,16 @@ namespace Calluna.Persistence
                     return;
                 }
 
-                // Load each registered loader's key from storage.
                 Dictionary<string, JToken> loadedData = LoadAllData();
 
-                // Apply data migrations if the stored version is stale.
                 if (storedVersion < currentVersion)
                 {
                     MigrateData(loadedData, storedVersion);
-                    // Write migrated entries back individually and update the version.
                     foreach (KeyValuePair<string, JToken> pair in loadedData)
                         _saveLoader.Save(pair.Key, pair.Value);
                     _saveLoader.Save(VersionKey, currentVersion);
                 }
 
-                // Dispatch each entry to its DataSaveLoader.
                 foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
                     TryLoadData(saveLoader, loadedData);
             }
@@ -115,8 +113,9 @@ namespace Calluna.Persistence
         }
 
         /// <summary>
-        /// Saves data from all dirty DataSaveLoaders. Loaders that report IsDirty == false are skipped,
-        /// reducing serialization overhead when most data has not changed.
+        /// Saves data from all dirty DataSaveLoaders synchronously on the calling thread.
+        /// Loaders that report <c>IsDirty == false</c> are skipped.
+        /// After a successful write all loaders are marked clean.
         /// </summary>
         public void Save()
         {
@@ -128,25 +127,8 @@ namespace Calluna.Persistence
 
             try
             {
-                // Serialize all dirty loaders before writing anything.
-                // If any serialization fails, the exception is caught here and nothing is written,
-                // preventing a partial save that would leave data in an inconsistent state.
-                List<(string Id, JToken Data)> toWrite = null;
-                foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
-                {
-                    if (!saveLoader.IsDirty) continue;
-                    JToken serialized = saveLoader.GetSerializedData();
-                    toWrite ??= new List<(string, JToken)>(_saveLoaders.Count);
-                    toWrite.Add((saveLoader.DataId, serialized));
-                }
-
-                // All serializations succeeded — commit to storage.
-                if (toWrite != null)
-                {
-                    foreach ((string id, JToken data) in toWrite)
-                        _saveLoader.Save(id, data);
-                }
-                _saveLoader.Save(VersionKey, currentVersion);
+                List<(string Id, JToken Data)> snapshot = SerializeDirtyLoaders();
+                _writer.CommitToStorage(snapshot);
 
                 foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
                     saveLoader.MarkClean();
@@ -156,6 +138,60 @@ namespace Calluna.Persistence
                 Debug.LogError($"Failed to save game data '{_arguments.GameDataId}'");
                 Debug.LogException(e);
             }
+        }
+
+        /// <summary>
+        /// Saves data from all dirty DataSaveLoaders. Serialization runs on the calling thread
+        /// (main thread) so that live game state is captured safely. The write to storage is
+        /// dispatched to a background thread so the caller is not blocked by I/O.
+        /// <para>
+        /// If the underlying <see cref="SaveLoader"/> requires main-thread access (e.g.
+        /// <see cref="PlayerPrefsSaveLoader"/>) or the platform does not support background
+        /// threads (WebGL), this method falls back to a synchronous write and logs a one-time
+        /// warning.
+        /// </para>
+        /// <para>
+        /// <b>Dirty flags are not cleared</b> after an async save. Call <see cref="Save"/> to
+        /// clear them — this happens automatically on DI cleanup when <c>Save Data On Clean</c>
+        /// is enabled in <see cref="GameDataInstaller"/>.
+        /// </para>
+        /// </summary>
+        /// <returns>
+        /// A <see cref="Task"/> that completes when the write finishes. Fire-and-forget is safe;
+        /// await it only if you need to react to completion or errors.
+        /// </returns>
+        public Task SaveAsync()
+        {
+            if (_loadFailed.Value)
+            {
+                Debug.LogError("SaveAsync was aborted since loading of the GameData failed initially");
+                return Task.CompletedTask;
+            }
+
+            List<(string Id, JToken Data)> snapshot;
+            try
+            {
+                snapshot = SerializeDirtyLoaders();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"Failed to serialize game data '{_arguments.GameDataId}'");
+                Debug.LogException(e);
+                return Task.CompletedTask;
+            }
+
+            return _writer.SaveAsync(snapshot);
+        }
+
+        /// <summary>
+        /// Blocks the calling thread until any in-progress background write initiated by
+        /// <see cref="SaveAsync"/> completes. Called automatically by the DI cleanup path
+        /// before the final synchronous <see cref="Save"/>, ensuring no write is lost on
+        /// scene teardown.
+        /// </summary>
+        public void FlushPendingWrite()
+        {
+            _writer.FlushPendingWrite();
         }
 
         /// <summary>
@@ -182,6 +218,32 @@ namespace Calluna.Persistence
                 Debug.LogException(e);
             }
         }
+
+        // -----------------------------------------------------------------------
+        // Private — serialization
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Serializes all dirty DataSaveLoaders into an in-memory snapshot.
+        /// Must be called on the main thread. Throws if any serialization fails so that
+        /// no partial snapshot is handed to the write phase.
+        /// </summary>
+        private List<(string Id, JToken Data)> SerializeDirtyLoaders()
+        {
+            List<(string Id, JToken Data)> result = null;
+            foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
+            {
+                if (!saveLoader.IsDirty) continue;
+                JToken serialized = saveLoader.GetSerializedData();
+                result ??= new List<(string, JToken)>(_saveLoaders.Count);
+                result.Add((saveLoader.DataId, serialized));
+            }
+            return result;
+        }
+
+        // -----------------------------------------------------------------------
+        // Private — load helpers
+        // -----------------------------------------------------------------------
 
         private void BuildSaveLoaderMap()
         {
@@ -213,16 +275,13 @@ namespace Calluna.Persistence
         /// </summary>
         private void MigrateFromLegacyBlobIfNeeded()
         {
-            // Already in new per-key format — nothing to do.
             if (_saveLoader.Has(VersionKey))
                 return;
 
-            // Check for the legacy single-blob stored under the GameDataId key.
             JObject rawData = _saveLoader.Load<JObject>(_arguments.GameDataId, null);
             if (rawData == null)
                 return;
 
-            // Apply any pending GameData structure migrations (e.g. the v0→v1 blob shape change).
             int structureVersion = rawData["StructureVersion"]?.Value<int>() ?? 0;
             GameData data;
             if (structureVersion < CurrentGameDataStructureVersion)
@@ -240,14 +299,12 @@ namespace Calluna.Persistence
                 data = _serializer.Deserialize<GameData>(rawData);
             }
 
-            // Write each entry as its own key in the underlying SaveLoader.
             if (data.Entries != null)
             {
                 foreach (GameDataEntry entry in data.Entries)
                     _saveLoader.Save(entry.Id, entry.Payload);
             }
 
-            // Write the version and remove the old blob key.
             _saveLoader.Save(VersionKey, data.Version);
             _saveLoader.Delete(_arguments.GameDataId);
         }

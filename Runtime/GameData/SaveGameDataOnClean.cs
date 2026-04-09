@@ -14,6 +14,9 @@ namespace Calluna.Persistence
 
         public void Clean()
         {
+            // Ensure any in-progress background write from SaveAsync() completes before
+            // the final synchronous save, so no data is lost on scene teardown.
+            _gameDataPersistence.FlushPendingWrite();
             _gameDataPersistence.Save();
         }
     }

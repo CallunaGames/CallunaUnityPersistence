@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace Calluna.Persistence
 {
-    public class PlayerPrefsSaveLoader : SaveLoader, Injectable
+    public class PlayerPrefsSaveLoader : SaveLoader, IMainThreadSaveLoader, Injectable
     {
         public event Action OnClear;
         

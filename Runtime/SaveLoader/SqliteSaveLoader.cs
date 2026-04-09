@@ -18,7 +18,7 @@ namespace Calluna.Persistence
     /// </para>
     /// <para><b>Platform note:</b> WebGL is not supported.</para>
     /// </summary>
-    public class SqliteSaveLoader : SaveLoader, Injectable, Cleanable
+    public class SqliteSaveLoader : SaveLoader, IBatchableSaveLoader, Injectable, Cleanable
     {
         [Table("entries")]
         private class Entry
@@ -34,6 +34,8 @@ namespace Calluna.Persistence
 
         private JsonSerializer _serializer;
         private string _path;
+        private bool _synchronousOff;
+        private bool _fullMutex;
         private SQLiteConnection _connection;
 
         // Lazy-open: the connection is created on first use so that
@@ -45,6 +47,8 @@ namespace Calluna.Persistence
             _serializer = resolver.Resolve<JsonSerializer>();
             Arguments arguments = resolver.Resolve<Arguments>();
             _path = Path.Combine(Application.persistentDataPath, arguments.FileName);
+            _synchronousOff = arguments.SynchronousOff;
+            _fullMutex = arguments.FullMutex;
         }
 
         /// <summary>
@@ -77,6 +81,10 @@ namespace Calluna.Persistence
             Connection.Delete<Entry>(id);
         }
 
+        void IBatchableSaveLoader.BeginBatch() => Connection.BeginTransaction();
+        void IBatchableSaveLoader.CommitBatch() => Connection.Commit();
+        void IBatchableSaveLoader.RollbackBatch() => Connection.Rollback();
+
         public void Clear()
         {
             Clean();
@@ -86,7 +94,22 @@ namespace Calluna.Persistence
 
         private SQLiteConnection OpenConnection()
         {
-            SQLiteConnection conn = new SQLiteConnection(_path);
+            SQLiteOpenFlags flags = SQLiteOpenFlags.ReadWrite | SQLiteOpenFlags.Create;
+            if (_fullMutex)
+                flags |= SQLiteOpenFlags.FullMutex;
+
+            SQLiteConnection conn = new SQLiteConnection(_path, flags);
+
+            // WAL mode avoids a rollback journal file and per-write fsync, giving significantly
+            // better write throughput for the many small writes produced by per-key saves.
+            conn.ExecuteScalar<string>("PRAGMA journal_mode=WAL;");
+
+            // synchronous=OFF removes WAL frame syncing entirely, reducing per-transaction
+            // overhead from ~2ms to ~0.1ms. Risk: data may be lost on OS crash or power loss
+            // (not on application crash — SQLite always rolls back uncommitted transactions).
+            if (_synchronousOff)
+                conn.ExecuteScalar<string>("PRAGMA synchronous=OFF;");
+
             conn.CreateTable<Entry>();
             return conn;
         }
@@ -102,6 +125,19 @@ namespace Calluna.Persistence
         public class Arguments
         {
             public string FileName;
+
+            /// <summary>
+            /// When <c>true</c>, opens the connection with <c>SQLITE_OPEN_FULLMUTEX</c> so it
+            /// is safe to use from multiple threads. Required when async saves are enabled.
+            /// </summary>
+            public bool FullMutex;
+
+            /// <summary>
+            /// When <c>true</c>, sets <c>PRAGMA synchronous=OFF</c>, removing WAL frame syncing.
+            /// Reduces per-transaction overhead from ~2ms to ~0.1ms at the cost of potential
+            /// data loss on OS crash or power failure (not on normal application exit or crash).
+            /// </summary>
+            public bool SynchronousOff;
         }
     }
 }

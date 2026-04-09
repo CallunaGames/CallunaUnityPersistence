@@ -131,6 +131,22 @@ namespace Calluna.Template.Tests
             return serializer;
         }
 
+        private static GameDataWriter BuildWriter(SaveLoader saveLoader, string gameDataId, int currentVersion)
+        {
+            Mock<Resolver> r = new Mock<Resolver>();
+            r.Setup(x => x.Resolve<SaveLoader>()).Returns(saveLoader);
+            r.Setup(x => x.Resolve<GameDataWriter.Arguments>()).Returns(
+                new GameDataWriter.Arguments
+                {
+                    GameDataId = gameDataId,
+                    CurrentVersion = currentVersion,
+                });
+
+            GameDataWriter writer = new GameDataWriter();
+            ((Injectable)writer).Inject(r.Object);
+            return writer;
+        }
+
         private static GameDataPersistence BuildPersistence(
             FakeSaveLoader saveLoader,
             JsonSerializer serializer,
@@ -140,9 +156,12 @@ namespace Calluna.Template.Tests
             IReadOnlyList<IDataSaveLoader> dataLoaders,
             IReadOnlyList<IGameDataMigrator> migrators = null)
         {
+            GameDataWriter writer = BuildWriter(saveLoader, gameDataId, currentVersion);
+
             Mock<Resolver> r = new Mock<Resolver>();
             r.Setup(x => x.Resolve<SaveLoader>()).Returns(saveLoader);
             r.Setup(x => x.Resolve<JsonSerializer>()).Returns(serializer);
+            r.Setup(x => x.Resolve<GameDataWriter>()).Returns(writer);
             r.Setup(x => x.Resolve<GameDataPersistence.Arguments>()).Returns(
                 new GameDataPersistence.Arguments
                 {
