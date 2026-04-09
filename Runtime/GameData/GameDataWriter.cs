@@ -20,7 +20,6 @@ namespace Calluna.Persistence
     {
         private SaveLoader _saveLoader;
         private string _gameDataId;
-        private SynchronizationContext _syncContext;
         private int _currentVersion;
 
         private readonly object _writeLock = new object();
@@ -38,7 +37,6 @@ namespace Calluna.Persistence
             Arguments arguments = resolver.Resolve<Arguments>();
             _gameDataId = arguments.GameDataId;
             _currentVersion = arguments.CurrentVersion;
-            _syncContext = SynchronizationContext.Current;
         }
 
         /// <summary>
@@ -139,12 +137,8 @@ namespace Calluna.Persistence
             }
             catch (Exception e)
             {
-                string id = _gameDataId;
-                _syncContext?.Post(_ =>
-                {
-                    Debug.LogError($"SaveAsync failed for game data '{id}'");
-                    Debug.LogException(e);
-                }, null);
+                Debug.LogError($"SaveAsync failed for game data '{_gameDataId}'");
+                Debug.LogException(e);
             }
 
             // If a newer snapshot arrived while we were writing, commit it now.
