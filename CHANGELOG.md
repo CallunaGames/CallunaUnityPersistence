@@ -1,3 +1,8 @@
+## [1.7.1] - 2026-07-22
+
+### Fixed
+- `SqliteSaveLoader.Clean()` could close the underlying connection while a background write dispatched by `GameDataWriter.SaveAsync()` was still in progress, since DI cleanup order is not guaranteed. This produced `SQLiteException: bad parameter or other API misuse` on quit. `Clean()` now waits for any in-flight operation to finish before closing the connection (bounded by a 5s timeout, after which it logs a warning and closes anyway rather than hanging indefinitely).
+
 ## [1.7.0] - 2026-04-09
 
 ### Added
