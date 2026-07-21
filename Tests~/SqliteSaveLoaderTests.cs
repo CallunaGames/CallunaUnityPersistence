@@ -1,9 +1,14 @@
 using System;
 using System.IO;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 using Calluna.DI;
 using Calluna.Persistence;
 using Moq;
 using NUnit.Framework;
+using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace Calluna.Template.Tests
 {
@@ -307,6 +312,88 @@ namespace Calluna.Template.Tests
 
             int result = _loader.Load<int>(key);
             Assert.That(result, Is.EqualTo(value + 1));
+        }
+
+        // -----------------------------------------------------------------------
+        // Clean — must not close the connection out from under an in-flight operation
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [Description("Clean() called while an operation holds the connection's read lock => blocks until the " +
+                      "lock is released, then closes without throwing. Regression test for the shutdown race " +
+                      "where DI cleanup order let Clean() close the connection while a background " +
+                      "GameDataWriter.SaveAsync() write was still using it (SQLiteException: bad parameter or " +
+                      "other API misuse).")]
+        public void Clean_WhileOperationHoldsReadLock_WaitsForReleaseThenCloses()
+        {
+            // Open the connection before grabbing the lock ourselves.
+            _loader.Save("warmup", 1);
+
+            // Simulate an in-flight Save()/Load()/batch call the same way BlockingSaveLoader
+            // simulates one in GameDataWriterTests — by holding the read lock open.
+            _loader._connectionLock.EnterReadLock();
+            try
+            {
+                Task cleanTask = Task.Run(() => ((Cleanable)_loader).Clean());
+
+                // While the simulated operation still holds the lock, Clean() must not complete.
+                Assert.That(cleanTask.Wait(TimeSpan.FromMilliseconds(300)), Is.False,
+                    "Clean() completed while an operation still held the read lock.");
+
+                _loader._connectionLock.ExitReadLock();
+
+                Assert.That(cleanTask.Wait(TimeSpan.FromSeconds(5)), Is.True,
+                    "Clean() did not complete shortly after the read lock was released.");
+            }
+            finally
+            {
+                if (_loader._connectionLock.IsReadLockHeld)
+                    _loader._connectionLock.ExitReadLock();
+            }
+
+            Assert.DoesNotThrow(() => _loader.Save("warmup", 2));
+        }
+
+        [Test]
+        [Description("Clean() whose wait for the write lock times out (e.g. a stuck operation) => logs a " +
+                      "warning and closes the connection anyway instead of hanging the app on quit forever.")]
+        public void Clean_LockWaitTimesOut_LogsWarningAndClosesAnyway()
+        {
+            _loader.Save("warmup", 1);
+
+            TimeSpan original = SqliteSaveLoader.CleanLockTimeout;
+            SqliteSaveLoader.CleanLockTimeout = TimeSpan.FromMilliseconds(100);
+
+            // The read lock must be held by a *different* thread than the one calling Clean():
+            // ReaderWriterLockSlim is thread-affine, so a single thread holding a read lock and
+            // then requesting a write lock is an invalid upgrade (throws), not a timeout.
+            ManualResetEventSlim lockHeldSignal = new ManualResetEventSlim(false);
+            ManualResetEventSlim releaseGate = new ManualResetEventSlim(false);
+            Task holderTask = Task.Run(() =>
+            {
+                _loader._connectionLock.EnterReadLock();
+                lockHeldSignal.Set();
+                releaseGate.Wait(TimeSpan.FromSeconds(5));
+                _loader._connectionLock.ExitReadLock();
+            });
+
+            try
+            {
+                Assert.That(lockHeldSignal.Wait(TimeSpan.FromSeconds(5)), Is.True,
+                    "Background thread never signalled that it acquired the read lock.");
+
+                LogAssert.Expect(LogType.Warning, new Regex("timed out waiting"));
+                Assert.DoesNotThrow(() => ((Cleanable)_loader).Clean());
+            }
+            finally
+            {
+                releaseGate.Set();
+                holderTask.Wait(TimeSpan.FromSeconds(5));
+                SqliteSaveLoader.CleanLockTimeout = original;
+            }
+
+            // Clean() closed _connection despite the timeout, so this reopens it.
+            Assert.DoesNotThrow(() => _loader.Save("warmup", 2));
         }
     }
 }

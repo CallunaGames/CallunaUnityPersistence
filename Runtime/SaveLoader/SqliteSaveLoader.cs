@@ -45,7 +45,9 @@ namespace Calluna.Persistence
         // to a background thread via GameDataWriter.SaveAsync() - has finished. Without this,
         // DI cleanup order (which is not guaranteed) can close the connection while a background
         // write is still using it, producing a "bad parameter or other API misuse" SQLiteException.
-        private readonly ReaderWriterLockSlim _connectionLock = new();
+        // Internal (rather than private) so tests can hold/release it directly to deterministically
+        // simulate an in-flight operation, the same way BlockingSaveLoader does in GameDataWriterTests.
+        internal readonly ReaderWriterLockSlim _connectionLock = new();
 
         // Lazy-open: the connection is created on first use so that
         // Application.persistentDataPath is always ready when accessed.
@@ -63,7 +65,8 @@ namespace Calluna.Persistence
         /// <summary>
         /// Closes the SQLite connection. Called automatically by the Calluna.DI system during cleanup.
         /// </summary>
-        private static readonly TimeSpan CleanLockTimeout = TimeSpan.FromSeconds(5);
+        // Internal (not a const/readonly) so tests can shrink it to keep the timeout test fast.
+        internal static TimeSpan CleanLockTimeout = TimeSpan.FromSeconds(5);
 
         public void Clean()
         {
