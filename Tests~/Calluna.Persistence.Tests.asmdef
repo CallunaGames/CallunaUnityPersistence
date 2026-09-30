@@ -1,6 +1,6 @@
 {
     "name": "Calluna.Persistence.Tests",
-    "rootNamespace": "Calluna.Template.Tests",
+    "rootNamespace": "Calluna.Persistence.Tests",
     "references": [
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner",

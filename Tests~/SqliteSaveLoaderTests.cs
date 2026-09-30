@@ -10,7 +10,7 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
 
-namespace Calluna.Template.Tests
+namespace Calluna.Persistence.Tests
 {
     /// <summary>
     /// Tests for <see cref="SqliteSaveLoader"/>.
@@ -394,6 +394,129 @@ namespace Calluna.Template.Tests
 
             // Clean() closed _connection despite the timeout, so this reopens it.
             Assert.DoesNotThrow(() => _loader.Save("warmup", 2));
+        }
+
+        // -----------------------------------------------------------------------
+        // 1.8.0 — Has() before the connection is open, operations after Clean(), batches
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [Description("Has() as the first call on a new instance with existing data => true. Before 1.8.0 it " +
+                     "returned false until another call had opened the connection.")]
+        public void Has_FirstCallOnExistingDatabase_ReturnsTrue()
+        {
+            _loader.Save("existing", 1);
+            ((Cleanable)_loader).Clean();
+
+            SqliteSaveLoader fresh = BuildLoader(_tempFileName);
+            try
+            {
+                Assert.That(fresh.Has("existing"), Is.True);
+            }
+            finally
+            {
+                ((Cleanable)fresh).Clean();
+            }
+        }
+
+        [Test]
+        [Description("Has() without a database file => false, and no database file is created.")]
+        public void Has_NoDatabase_ReturnsFalseWithoutCreatingIt()
+        {
+            Assert.That(_loader.Has("anything"), Is.False);
+            Assert.That(File.Exists(ActualPath), Is.False);
+        }
+
+        [Test]
+        [Description("Save() and Load() after Clean() => work, without leaving a connection open " +
+                     "(the database file can be deleted right away).")]
+        public void AfterClean_SaveAndLoad_WorkWithoutLeavingConnectionOpen()
+        {
+            _loader.Save("key", 1);
+            ((Cleanable)_loader).Clean();
+
+            _loader.Save("key", 2);
+
+            Assert.That(_loader.Load<int>("key"), Is.EqualTo(2));
+            Assert.That(_loader.Has("key"), Is.True);
+            Assert.DoesNotThrow(() => File.Delete(ActualPath), "A connection was left open after Clean().");
+        }
+
+        [Test]
+        [Description("A batch after Clean() => committed on a short-lived connection, nothing left open.")]
+        public void AfterClean_Batch_CommitsWithoutLeavingConnectionOpen()
+        {
+            _loader.Save("warmup", 0);
+            ((Cleanable)_loader).Clean();
+            IBatchableSaveLoader batch = _loader;
+
+            batch.BeginBatch();
+            _loader.Save("a", 1);
+            _loader.Save("b", 2);
+            batch.CommitBatch();
+
+            SqliteSaveLoader fresh = BuildLoader(_tempFileName);
+            try
+            {
+                Assert.That(fresh.Load<int>("a"), Is.EqualTo(1));
+                Assert.That(fresh.Load<int>("b"), Is.EqualTo(2));
+            }
+            finally
+            {
+                ((Cleanable)fresh).Clean();
+            }
+            Assert.DoesNotThrow(() => File.Delete(ActualPath), "A connection was left open after the batch.");
+        }
+
+        [Test]
+        [Description("Clean() during a batch => waits until the batch is committed, so the transaction isn't cut off.")]
+        public void Clean_DuringBatch_WaitsUntilCommit()
+        {
+            IBatchableSaveLoader batch = _loader;
+            ManualResetEventSlim inBatch = new ManualResetEventSlim(false);
+            ManualResetEventSlim proceed = new ManualResetEventSlim(false);
+            Task batchTask = Task.Run(() =>
+            {
+                batch.BeginBatch();
+                _loader.Save("a", 1);
+                inBatch.Set();
+                proceed.Wait(TimeSpan.FromSeconds(5));
+                _loader.Save("b", 2);
+                batch.CommitBatch();
+            });
+
+            Assert.That(inBatch.Wait(TimeSpan.FromSeconds(5)), Is.True, "The batch never started.");
+            Task cleanTask = Task.Run(() => ((Cleanable)_loader).Clean());
+            Assert.That(cleanTask.Wait(200), Is.False, "Clean() must wait for the running batch.");
+
+            proceed.Set();
+            Assert.That(batchTask.Wait(TimeSpan.FromSeconds(5)), Is.True);
+            Assert.That(cleanTask.Wait(TimeSpan.FromSeconds(5)), Is.True);
+
+            SqliteSaveLoader fresh = BuildLoader(_tempFileName);
+            try
+            {
+                Assert.That(fresh.Load<int>("a"), Is.EqualTo(1));
+                Assert.That(fresh.Load<int>("b"), Is.EqualTo(2));
+            }
+            finally
+            {
+                ((Cleanable)fresh).Clean();
+            }
+        }
+
+        [Test]
+        [Description("RollbackBatch() => the batch's writes are discarded.")]
+        public void Batch_Rollback_DiscardsWrites()
+        {
+            _loader.Save("warmup", 0);
+            IBatchableSaveLoader batch = _loader;
+
+            batch.BeginBatch();
+            _loader.Save("a", 1);
+            batch.RollbackBatch();
+
+            Assert.That(_loader.Has("a"), Is.False);
         }
     }
 }

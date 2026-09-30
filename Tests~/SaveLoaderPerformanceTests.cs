@@ -7,7 +7,7 @@ using Moq;
 using NUnit.Framework;
 using UnityEngine;
 
-namespace Calluna.Template.Tests
+namespace Calluna.Persistence.Tests
 {
     /// <summary>
     /// Performance benchmarks for all three <see cref="SaveLoader"/> backends.

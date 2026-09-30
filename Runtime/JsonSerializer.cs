@@ -4,6 +4,12 @@ using Newtonsoft.Json.Linq;
 
 namespace Calluna.Persistence
 {
+    /// <summary>
+    /// Serializes to and from JSON strings and <see cref="JToken"/>s with one configuration: a bound
+    /// <see cref="JsonSerializerSettings"/> (e.g. with custom converters) applies to both. Without
+    /// bound settings: invariant culture, null values omitted, no indentation. A bound
+    /// <see cref="Newtonsoft.Json.JsonSerializer"/> replaces the one used for tokens.
+    /// </summary>
     public class JsonSerializer : Injectable
     {
         private JsonSerializerSettings _settings;
@@ -11,8 +17,9 @@ namespace Calluna.Persistence
 
         public void Inject(Resolver resolver)
         {
-            _settings = resolver.ResolveOptional<JsonSerializerSettings>() ?? new JsonSerializerSettings();
-            _jsonSerializer = resolver.ResolveOptional<Newtonsoft.Json.JsonSerializer>() ?? CreateDefaultSerializer();
+            _settings = resolver.ResolveOptional<JsonSerializerSettings>() ?? CreateDefaultSettings();
+            _jsonSerializer = resolver.ResolveOptional<Newtonsoft.Json.JsonSerializer>()
+                              ?? Newtonsoft.Json.JsonSerializer.Create(_settings);
         }
 
         public string Serialize<T>(T value) =>
@@ -38,13 +45,14 @@ namespace Calluna.Persistence
             return jValue.ToObject<T>(_jsonSerializer);
         }
 
-        private Newtonsoft.Json.JsonSerializer CreateDefaultSerializer()
+        // The former defaults of the token serializer - now used for strings as well.
+        private static JsonSerializerSettings CreateDefaultSettings()
         {
-            return new Newtonsoft.Json.JsonSerializer()
+            return new JsonSerializerSettings
             {
                 Culture = System.Globalization.CultureInfo.InvariantCulture,
-                NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore,
-                Formatting = Newtonsoft.Json.Formatting.None
+                NullValueHandling = NullValueHandling.Ignore,
+                Formatting = Formatting.None
             };
         }
     }

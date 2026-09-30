@@ -3,6 +3,8 @@ using UnityEngine;
 
 namespace Calluna.Persistence.Editor
 {
+    // Deprecated in 1.8.0, removed in 2.0.0: shows the single-blob PlayerPrefs format that
+    // GameDataPersistence replaced with one key per DataSaveLoader in 1.6.0.
     internal class GameDataViewerWindow : EditorWindow
     {
         private const string _defaultKey = "__GameData__";
@@ -24,6 +26,10 @@ namespace Calluna.Persistence.Editor
         private void OnGUI()
         {
             EditorGUILayout.LabelField("PlayerPrefs GameData Viewer", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "Deprecated - will be removed in 2.0.0. Shows the single-blob PlayerPrefs format used " +
+                "before 1.6.0; GameDataPersistence now stores one key per DataSaveLoader.",
+                MessageType.Warning);
             EditorGUILayout.Space();
 
             // Key field

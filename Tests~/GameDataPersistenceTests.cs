@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using System.Threading;
 using Calluna.DI;
 using Calluna.Persistence;
 using Moq;
@@ -9,7 +10,7 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
 
-namespace Calluna.Template.Tests
+namespace Calluna.Persistence.Tests
 {
     /// <summary>
     /// Tests for <see cref="GameDataPersistence"/>.
@@ -838,6 +839,241 @@ namespace Calluna.Template.Tests
             Assert.That(saveLoader.Has("legacyEntry"), Is.True);
             // Loader must have received its data.
             Assert.That(loader.LoadCalled, Is.True);
+        }
+
+        // -----------------------------------------------------------------------
+        // 1.8.0 — Save/OverrideSave wait for a background write
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Thread-safe store whose Save() blocks once armed, until <see cref="Release"/> -
+        /// simulates a background write that is still in flight.
+        /// </summary>
+        private class BlockingStore : SaveLoader
+        {
+            public event Action OnClear;
+            private readonly object _lock = new object();
+            private readonly Dictionary<string, string> _store = new Dictionary<string, string>();
+            private readonly ManualResetEventSlim _started = new ManualResetEventSlim(false);
+            private readonly ManualResetEventSlim _gate = new ManualResetEventSlim(false);
+            private bool _armed;
+
+            public void Arm() => _armed = true;
+            public bool WaitUntilBlocked() => _started.Wait(TimeSpan.FromSeconds(5));
+            public void Release() => _gate.Set();
+
+            public bool Has(string id) { lock (_lock) return _store.ContainsKey(id); }
+
+            public T Load<T>(string id, T defaultValue = default)
+            {
+                lock (_lock)
+                    return _store.TryGetValue(id, out string json)
+                        ? Newtonsoft.Json.JsonConvert.DeserializeObject<T>(json)
+                        : defaultValue;
+            }
+
+            public void Save<T>(string id, T value)
+            {
+                if (_armed)
+                {
+                    _armed = false;
+                    _started.Set();
+                    _gate.Wait(TimeSpan.FromSeconds(5));
+                }
+                lock (_lock)
+                    _store[id] = Newtonsoft.Json.JsonConvert.SerializeObject(value);
+            }
+
+            public void Delete(string id) { lock (_lock) _store.Remove(id); }
+            public void Clear() { lock (_lock) _store.Clear(); OnClear?.Invoke(); }
+        }
+
+        private static GameDataPersistence BuildPersistence(SaveLoader saveLoader, int minVersion, int currentVersion,
+            IReadOnlyList<IDataSaveLoader> dataLoaders, IReadOnlyList<IGameDataMigrator> migrators = null)
+        {
+            JsonSerializer serializer = BuildSerializer();
+            GameDataWriter writer = BuildWriter(saveLoader, "gdp_180", currentVersion);
+
+            Mock<Resolver> r = new Mock<Resolver>();
+            r.Setup(x => x.Resolve<SaveLoader>()).Returns(saveLoader);
+            r.Setup(x => x.Resolve<JsonSerializer>()).Returns(serializer);
+            r.Setup(x => x.Resolve<GameDataWriter>()).Returns(writer);
+            r.Setup(x => x.Resolve<GameDataPersistence.Arguments>()).Returns(
+                new GameDataPersistence.Arguments
+                {
+                    GameDataId = "gdp_180",
+                    MinSupportedVersion = minVersion,
+                    CurrentVersion = currentVersion,
+                    SaveLoaders = dataLoaders,
+                    Migrators = migrators
+                });
+
+            GameDataPersistence persistence = new GameDataPersistence();
+            ((Injectable)persistence).Inject(r.Object);
+            ((Initializable)persistence).Initialize();
+            return persistence;
+        }
+
+        [Test]
+        [Description("Save() while a SaveAsync() write is in flight and a newer snapshot is queued => waits for both, " +
+                     "so the synchronous save's newest data wins. Before 1.8.0 the queued (older) snapshot was " +
+                     "written after it and overwrote the newer data.")]
+        public void Save_WhileAsyncWriteInFlight_NewestDataWins()
+        {
+            BlockingStore store = new BlockingStore();
+            StubDataSaveLoader loader = new StubDataSaveLoader("data") { SerializedValue = JToken.FromObject(1) };
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { loader });
+            persistence.Load();
+
+            store.Arm();
+            System.Threading.Tasks.Task first = persistence.SaveAsync();
+            Assert.That(store.WaitUntilBlocked(), Is.True, "The background write never started.");
+            loader.SerializedValue = JToken.FromObject(2);
+            persistence.SaveAsync(); // queued behind the running write
+            loader.SerializedValue = JToken.FromObject(3);
+
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                Thread.Sleep(100);
+                store.Release();
+            });
+            persistence.Save();
+            first.Wait(TimeSpan.FromSeconds(5));
+            persistence.FlushPendingWrite();
+
+            Assert.That(store.Load<int>("data"), Is.EqualTo(3));
+        }
+
+        [Test]
+        [Description("OverrideSave() while a SaveAsync() write is in flight => waits for it, so the override wins.")]
+        public void OverrideSave_WhileAsyncWriteInFlight_OverrideWins()
+        {
+            BlockingStore store = new BlockingStore();
+            StubDataSaveLoader loader = new StubDataSaveLoader("data") { SerializedValue = JToken.FromObject(1) };
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { loader });
+            persistence.Load();
+
+            store.Arm();
+            persistence.SaveAsync();
+            Assert.That(store.WaitUntilBlocked(), Is.True, "The background write never started.");
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                Thread.Sleep(100);
+                store.Release();
+            });
+
+            persistence.OverrideSave(new Dictionary<string, JToken> { ["data"] = JToken.FromObject(9) }, 1);
+            persistence.FlushPendingWrite();
+
+            Assert.That(store.Load<int>("data"), Is.EqualTo(9));
+        }
+
+        // -----------------------------------------------------------------------
+        // 1.8.0 — batched writes of OverrideSave and migrations
+        // -----------------------------------------------------------------------
+
+        private class BatchCountingSaveLoader : FakeSaveLoader, IBatchableSaveLoader
+        {
+            public int BeginCount;
+            public int CommitCount;
+
+            void IBatchableSaveLoader.BeginBatch() => BeginCount++;
+            void IBatchableSaveLoader.CommitBatch() => CommitCount++;
+            void IBatchableSaveLoader.RollbackBatch() { }
+        }
+
+        [Test]
+        [Description("OverrideSave() with several entries => written in one batch.")]
+        public void OverrideSave_SeveralEntries_WrittenInOneBatch()
+        {
+            BatchCountingSaveLoader store = new BatchCountingSaveLoader();
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[0]);
+            persistence.Load();
+
+            persistence.OverrideSave(new Dictionary<string, JToken>
+            {
+                ["a"] = JToken.FromObject(1),
+                ["b"] = JToken.FromObject(2),
+            }, 1);
+
+            Assert.That(store.BeginCount, Is.EqualTo(1));
+            Assert.That(store.CommitCount, Is.EqualTo(1));
+            Assert.That(store.Load<int>("b"), Is.EqualTo(2));
+        }
+
+        private class RenamingMigrator : IGameDataMigrator
+        {
+            public int Version => 1;
+
+            public void Migrate(Dictionary<string, JToken> data)
+            {
+                data["new"] = data["old"];
+                data.Remove("old");
+            }
+        }
+
+        [Test]
+        [Description("A migrator removes a slice => the slice is deleted from storage, and the migration is written in one batch.")]
+        public void Load_MigratorRemovesSlice_SliceDeletedInOneBatch()
+        {
+            BatchCountingSaveLoader store = new BatchCountingSaveLoader();
+            store.Save(GameDataPersistence.VersionKey, 0);
+            store.Save("old", JToken.FromObject(5));
+            store.Save("kept", JToken.FromObject(6));
+            StubDataSaveLoader oldLoader = new StubDataSaveLoader("old");
+            StubDataSaveLoader newLoader = new StubDataSaveLoader("new");
+            StubDataSaveLoader keptLoader = new StubDataSaveLoader("kept");
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1,
+                new IDataSaveLoader[] { oldLoader, newLoader, keptLoader }, new IGameDataMigrator[] { new RenamingMigrator() });
+
+            persistence.Load();
+
+            Assert.That(persistence.LoadingFailed.Value, Is.False);
+            Assert.That(store.Has("old"), Is.False, "The removed slice must be deleted.");
+            Assert.That(store.Load<int>("new"), Is.EqualTo(5));
+            Assert.That(store.Load<int>("kept"), Is.EqualTo(6));
+            Assert.That(store.Load<int>(GameDataPersistence.VersionKey), Is.EqualTo(1));
+            Assert.That(store.BeginCount, Is.EqualTo(1));
+            Assert.That(store.CommitCount, Is.EqualTo(1));
+        }
+
+        // -----------------------------------------------------------------------
+        // 1.8.0 — a reset writes every loader on the next save
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [Description("Stored data below MinSupportedVersion is reset => the next Save() also writes loaders that aren't " +
+                     "dirty. Before 1.8.0 their stale data stayed and was declared current by the new version key.")]
+        public void Save_AfterReset_WritesCleanLoadersToo()
+        {
+            FakeSaveLoader store = new FakeSaveLoader();
+            store.Save(GameDataPersistence.VersionKey, 0);
+            store.Save("data", JToken.FromObject("stale"));
+            DirtyTrackingStub loader = new DirtyTrackingStub("data") { _isDirty = false };
+            GameDataPersistence persistence = BuildPersistence(store, 1, 1, new IDataSaveLoader[] { loader });
+            persistence.Load();
+            Assert.That(persistence.DataWasReset.Value, Is.True);
+
+            persistence.Save();
+
+            Assert.That(loader.GetSerializedDataCallCount, Is.EqualTo(1));
+            Assert.That(store.Load<int>("data"), Is.EqualTo(42));
+        }
+
+        [Test]
+        [Description("After the first Save() following a reset, clean loaders are skipped again.")]
+        public void Save_SecondSaveAfterReset_SkipsCleanLoadersAgain()
+        {
+            FakeSaveLoader store = new FakeSaveLoader();
+            store.Save(GameDataPersistence.VersionKey, 0);
+            DirtyTrackingStub loader = new DirtyTrackingStub("data") { _isDirty = false };
+            GameDataPersistence persistence = BuildPersistence(store, 1, 1, new IDataSaveLoader[] { loader });
+            persistence.Load();
+            persistence.Save();
+
+            persistence.Save();
+
+            Assert.That(loader.GetSerializedDataCallCount, Is.EqualTo(1));
         }
     }
 }
