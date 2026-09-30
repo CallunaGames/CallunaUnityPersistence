@@ -38,19 +38,21 @@ public interface SaveLoader
 
 ### PlayerPrefsSaveLoader
 
-Stores primitives (`int`, `float`, `bool`, `string`) directly in `PlayerPrefs`. Complex types are JSON-serialised and stored as strings.
+Stores primitives (`int`, `float`, `bool`, `string`) directly in `PlayerPrefs`. Complex types are JSON-serialised and stored as strings. Calls `PlayerPrefs.Save()` after every change - within a `GameDataPersistence` save only once, at the end. A failed save can't undo the values it already set, since `PlayerPrefs` has no transactions.
 
 Use `PlayerPrefsSaveLoaderInstaller` to wire it. Add the MonoBehaviour to your scene's MonoContext — no further configuration is needed.
 
 ### PersistentDataPathSaveLoader
 
-Stores all data as a `Dictionary<string, JToken>` in a single JSON file under `Application.persistentDataPath`. File streams are kept open for performance and closed when `Clean()` is called.
+Stores all data as a `Dictionary<string, JToken>` in a single JSON file under `Application.persistentDataPath`. File streams are kept open for performance and closed when `Clean()` is called. Every change rewrites the file - within a `GameDataPersistence` save only once, at the end. `Has()` doesn't create the file. Operations after `Clean()` still work, but read and write the file in one go without keeping it open.
 
 Use `PersistentDataPathSaveLoaderInstaller` to wire it. Add the MonoBehaviour to your scene's MonoContext and set the **File Name** field in the Inspector (default: `SaveData.txt`).
 
 ### SqliteSaveLoader
 
-Stores each key-value pair as a separate row in a local SQLite database under `Application.persistentDataPath`. Because each key has its own row, only the rows that actually change need to be written on each save — no full-file rewrite.
+Stores each key-value pair as a separate row in a local SQLite database under `Application.persistentDataPath`. Because each key has its own row, only the rows that actually change need to be written on each save — no full-file rewrite. A `GameDataPersistence` save is one transaction.
+
+The connection is opened on first use (`Has()` doesn't create a missing database) and closed by `Clean()`, which waits for running operations and transactions to finish. Operations after `Clean()` - e.g. a final save that the DI cleanup happens to run after the loader's cleanup - still work, but on a short-lived connection that is closed right away.
 
 Use `SqliteSaveLoaderInstaller` to wire it. Add the MonoBehaviour to your scene's MonoContext and configure it in the Inspector.
 
@@ -227,11 +229,11 @@ void FlushPendingWrite();
 void OverrideSave(Dictionary<string, JToken> data, int version);
 ```
 
-- `Load()` loads each `DataSaveLoader`'s key individually, applies any pending `GameDataMigrator` steps in ascending version order, and dispatches data to each loader. If the stored version is below `MinSupportedVersion` all data is discarded, defaults are used, and `DataWasReset` is set to `true`. If any exception is thrown during load, `LoadingFailed` is set to `true`.
-- `Save()` is a no-op when `LoadingFailed` is `true`. Only loaders where `IsDirty == true` are serialised. All dirty loaders are serialised before anything is written — if any serialisation fails the entire write is aborted, leaving storage unchanged. After a successful write, `MarkClean()` is called on every loader.
+- `Load()` loads each `DataSaveLoader`'s key individually, applies any pending `GameDataMigrator` steps in ascending version order, and dispatches data to each loader. The migrated data is written back in one batch; a slice a migrator removed from the dictionary is deleted from storage. If the stored version is below `MinSupportedVersion` all data is discarded, defaults are used, and `DataWasReset` is set to `true` - the next `Save()` then writes every loader, dirty or not, so no stale data survives under the new version. If any exception is thrown during load, `LoadingFailed` is set to `true`.
+- `Save()` is a no-op when `LoadingFailed` is `true`. It first waits for a background write started by `SaveAsync()`, so an older queued snapshot can't overwrite the newer data. Only loaders where `IsDirty == true` are serialised. All dirty loaders are serialised before anything is written — if any serialisation fails the entire write is aborted, leaving storage unchanged. After a successful write, `MarkClean()` is called on every loader.
 - `SaveAsync()` serialises dirty loaders on the calling (main) thread, then dispatches the write to a background thread so the caller is not blocked by I/O. Fire-and-forget is safe; await the returned `Task` only if you need to react to completion. **Dirty flags are not cleared after an async save** — the final synchronous `Save()` on DI cleanup handles that. Falls back to a synchronous write (with a one-time warning) when the underlying `SaveLoader` requires main-thread access (e.g. `PlayerPrefsSaveLoader`) or the platform does not support background threads (WebGL). When using `SqliteSaveLoader` with `SaveAsync()`, enable the **Full Mutex** toggle in `SqliteSaveLoaderInstaller`.
 - `FlushPendingWrite()` blocks the calling thread until any in-progress background write started by `SaveAsync()` completes. Called automatically by the DI cleanup path before the final `Save()`, so no write is lost on scene teardown. You only need to call this manually if you are managing the DI lifecycle yourself.
-- `OverrideSave()` writes each entry in the supplied dictionary as its own key and updates `__version__`; use with care. Also a no-op when `LoadingFailed` is `true`.
+- `OverrideSave()` writes each entry in the supplied dictionary as its own key and updates `__version__`, in one batch after waiting for a background write; use with care. Also a no-op when `LoadingFailed` is `true`.
 
 ### Usage — async saves
 
@@ -405,13 +407,15 @@ binder.Bind<JsonSerializerSettings>()
     .AsSingle();
 ```
 
-`JsonSerializer` resolves `JsonSerializerSettings` as optional — if no binding is present the defaults are used, so this step is only needed when you want to override them.
+`JsonSerializer` resolves `JsonSerializerSettings` as optional — if no binding is present the defaults are used (invariant culture, null values omitted, no indentation), so this step is only needed when you want to override them. The settings apply to strings and to `JToken`s alike, i.e. also to the data of every `DataSaveLoader`. A bound `Newtonsoft.Json.JsonSerializer` replaces the serializer used for `JToken`s.
 
 ---
 
 ## Editor Tooling
 
-### Game Data Viewer
+### Game Data Viewer (deprecated)
+
+**Deprecated in 1.8.0, removed in 2.0.0.** It shows the single-blob PlayerPrefs format that `GameDataPersistence` replaced with one key per `DataSaveLoader` in 1.6.0.
 
 An editor window for inspecting and editing raw `GameData` JSON stored in PlayerPrefs. Open it via **Calluna > Game Data Viewer**.
 

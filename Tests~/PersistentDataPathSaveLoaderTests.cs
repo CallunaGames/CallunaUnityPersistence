@@ -5,7 +5,7 @@ using Calluna.Persistence;
 using Moq;
 using NUnit.Framework;
 
-namespace Calluna.Template.Tests
+namespace Calluna.Persistence.Tests
 {
     /// <summary>
     /// Tests for <see cref="PersistentDataPathSaveLoader"/>.
@@ -325,6 +325,98 @@ namespace Calluna.Template.Tests
 
             int result = _loader.Load<int>(key);
             Assert.That(result, Is.EqualTo(value + 1));
+        }
+
+        // -----------------------------------------------------------------------
+        // 1.8.0 — Has() before the file is read, operations after Clean(), batches
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [Description("Has() as the first call on a new instance with an existing file => true. Before 1.8.0 it " +
+                     "returned false until another call had read the file.")]
+        public void Has_FirstCallOnExistingFile_ReturnsTrue()
+        {
+            _loader.Save("existing", 1);
+            ((Calluna.DI.Cleanable)_loader).Clean();
+
+            PersistentDataPathSaveLoader fresh = BuildLoader(_tempFilePath);
+            try
+            {
+                Assert.That(fresh.Has("existing"), Is.True);
+            }
+            finally
+            {
+                ((Calluna.DI.Cleanable)fresh).Clean();
+            }
+        }
+
+        [Test]
+        [Description("Has() without a file => false, and no file is created.")]
+        public void Has_NoFile_ReturnsFalseWithoutCreatingIt()
+        {
+            Assert.That(_loader.Has("anything"), Is.False);
+            Assert.That(File.Exists(ActualPath), Is.False);
+        }
+
+        [Test]
+        [Description("Save() after Clean() => written without keeping the file open (it can be deleted right away).")]
+        public void AfterClean_Save_WritesWithoutKeepingFileOpen()
+        {
+            _loader.Save("key", 1);
+            ((Calluna.DI.Cleanable)_loader).Clean();
+
+            _loader.Save("key", 2);
+
+            PersistentDataPathSaveLoader fresh = BuildLoader(_tempFilePath);
+            try
+            {
+                Assert.That(fresh.Load<int>("key"), Is.EqualTo(2));
+            }
+            finally
+            {
+                ((Calluna.DI.Cleanable)fresh).Clean();
+            }
+            Assert.DoesNotThrow(() => File.Delete(ActualPath), "The file was left open after Clean().");
+        }
+
+        [Test]
+        [Description("Writes in a batch => the file is written once, on commit.")]
+        public void Batch_WritesFileOnlyOnCommit()
+        {
+            _loader.Save("warmup", 0);
+            IBatchableSaveLoader batch = _loader;
+
+            batch.BeginBatch();
+            _loader.Save("a", 1);
+            _loader.Save("b", 2);
+            Assert.That(ReadKeysFromFile(), Does.Not.Contain("a"), "Written before the commit.");
+            batch.CommitBatch();
+
+            Assert.That(ReadKeysFromFile(), Does.Contain("a").And.Contain("b"));
+        }
+
+        [Test]
+        [Description("RollbackBatch() => the batch's writes are discarded.")]
+        public void Batch_Rollback_DiscardsWrites()
+        {
+            _loader.Save("warmup", 0);
+            IBatchableSaveLoader batch = _loader;
+
+            batch.BeginBatch();
+            _loader.Save("a", 1);
+            batch.RollbackBatch();
+
+            Assert.That(_loader.Has("a"), Is.False);
+            Assert.That(ReadKeysFromFile(), Does.Not.Contain("a"));
+        }
+
+        // The loader keeps the file open for reading and writing, but shares it for reading.
+        private System.Collections.Generic.ICollection<string> ReadKeysFromFile()
+        {
+            using FileStream stream = new FileStream(ActualPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using StreamReader reader = new StreamReader(stream);
+            return Newtonsoft.Json.JsonConvert
+                .DeserializeObject<System.Collections.Generic.Dictionary<string, object>>(reader.ReadToEnd()).Keys;
         }
     }
 }

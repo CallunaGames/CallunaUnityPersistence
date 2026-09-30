@@ -4,7 +4,7 @@ using Moq;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 
-namespace Calluna.Template.Tests
+namespace Calluna.Persistence.Tests
 {
     [TestFixture]
     public class JsonSerializerTests
@@ -181,6 +181,58 @@ namespace Calluna.Template.Tests
 
             Assert.That(result.Name, Is.EqualTo(original.Name));
             Assert.That(result.Score, Is.EqualTo(original.Score));
+        }
+
+        // -----------------------------------------------------------------------
+        // 1.8.0 — one configuration for strings and tokens
+        // -----------------------------------------------------------------------
+
+        private class Temperature
+        {
+            public double Celsius;
+        }
+
+        // Writes a Temperature as a plain string like "21.5C".
+        private class TemperatureConverter : Newtonsoft.Json.JsonConverter<Temperature>
+        {
+            public override void WriteJson(Newtonsoft.Json.JsonWriter writer, Temperature value, Newtonsoft.Json.JsonSerializer serializer) =>
+                writer.WriteValue(value.Celsius.ToString(System.Globalization.CultureInfo.InvariantCulture) + "C");
+
+            public override Temperature ReadJson(Newtonsoft.Json.JsonReader reader, System.Type objectType, Temperature existingValue,
+                bool hasExistingValue, Newtonsoft.Json.JsonSerializer serializer) =>
+                new Temperature { Celsius = double.Parse(((string)reader.Value).TrimEnd('C'), System.Globalization.CultureInfo.InvariantCulture) };
+        }
+
+        [Test]
+        [Description("Bound JsonSerializerSettings with a converter => used for tokens as well (DataSaveLoader path). " +
+                     "Before 1.8.0 only the string methods used the bound settings.")]
+        public void BoundSettings_ConverterAppliesToStringsAndTokens()
+        {
+            Newtonsoft.Json.JsonSerializerSettings settings = new Newtonsoft.Json.JsonSerializerSettings();
+            settings.Converters.Add(new TemperatureConverter());
+            Mock<Resolver> resolverMock = new Mock<Resolver>();
+            resolverMock.Setup(r => r.ResolveOptional<Newtonsoft.Json.JsonSerializerSettings>()).Returns(settings);
+            resolverMock.Setup(r => r.ResolveOptional<Newtonsoft.Json.JsonSerializer>()).Returns((Newtonsoft.Json.JsonSerializer)null);
+            JsonSerializer serializer = new JsonSerializer();
+            ((Injectable)serializer).Inject(resolverMock.Object);
+            Temperature value = new Temperature { Celsius = 21.5 };
+
+            JToken token = serializer.SerializeToToken(value);
+            string json = serializer.Serialize(value);
+
+            Assert.That(token.Type, Is.EqualTo(JTokenType.String));
+            Assert.That(token.Value<string>(), Is.EqualTo("21.5C"));
+            Assert.That(json, Is.EqualTo("\"21.5C\""));
+        }
+
+        [Test]
+        [Description("Default configuration => null values are omitted in strings, like in tokens.")]
+        public void Defaults_NullValuesOmittedInStringsAndTokens()
+        {
+            SampleData value = new SampleData { Name = null, Score = 3 };
+
+            Assert.That(_serializer.Serialize(value), Does.Not.Contain("Name"));
+            Assert.That(((JObject)_serializer.SerializeToToken(value)).ContainsKey("Name"), Is.False);
         }
     }
 }

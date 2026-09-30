@@ -1,3 +1,25 @@
+## [1.8.0-pre.1] - 2026-09-30
+
+Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.5.2. Uses no API that core 2.0.0 removes.
+
+### Fixed
+- `GameDataPersistence.Save()` and `OverrideSave()` now wait for a background write started by `SaveAsync()`. Before, a synchronous save during a running async write could be followed by the async write's queued, older snapshot - overwriting newer data with older.
+- After stored data below `MinSupportedVersion` was reset, the next `Save()` writes every loader, including ones with dirty tracking that report `IsDirty == false`. Before, their stale data stayed in storage and the new version key declared it current, so it was loaded on the next start.
+- A slice that a `GameDataMigrator` removes from the dictionary is now deleted from storage. The migrated data is written in one batch (one SQLite transaction instead of one per key).
+- `SqliteSaveLoader.Has()` and `PersistentDataPathSaveLoader.Has()` returned `false` for existing data until another call had opened the database or read the file. They now open/read it like `Load()` - without creating a missing database or file.
+- `SqliteSaveLoader`: operations after `Clean()` reopened a connection that was never closed. They now run on a short-lived connection that is closed right away (keeping the intent that nothing stays open after cleanup, without losing a final save that runs after the loader's cleanup). `PersistentDataPathSaveLoader` likewise no longer reopens its file streams after `Clean()`.
+- `SqliteSaveLoader.Clean()` could close the connection between `BeginBatch` and `CommitBatch`, since the lock was only held per operation. A batch now holds it until it is committed or rolled back.
+- `package.json`: dependencies are version numbers instead of Git URLs (which UPM doesn't support in package dependencies) - `com.calluna.core` 1.7.0, `com.calluna.di` 1.5.2; `unity` / `unityRelease` corrected to `6000.0` / `33f1`.
+
+### Changed
+- `GameDataPersistence` no longer uses the implicit `T -> Observable<T>` conversion, which core 2.0.0 removes.
+- `JsonSerializer` has one configuration: a bound `JsonSerializerSettings` (e.g. with converters) now applies to `JToken`s as well - i.e. to every `DataSaveLoader` - not only to strings. Without bound settings the former token defaults apply to both: invariant culture, null values omitted, no indentation. Strings produced by `Serialize()` therefore no longer contain `null` properties; reading them is unaffected.
+- `PersistentDataPathSaveLoader` and `PlayerPrefsSaveLoader` support batches: a `GameDataPersistence` save rewrites the file / calls `PlayerPrefs.Save()` once instead of once per key.
+- Test assembly: root namespace `Calluna.Persistence.Tests` (was `Calluna.Template.Tests`).
+
+### Deprecated
+- Editor window **Calluna > Game Data Viewer**: shows the single-blob PlayerPrefs format replaced in 1.6.0. Removed in 2.0.0.
+
 ## [1.7.1] - 2026-07-22
 
 ### Fixed

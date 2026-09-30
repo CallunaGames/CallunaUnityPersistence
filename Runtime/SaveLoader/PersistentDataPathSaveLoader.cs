@@ -7,13 +7,26 @@ using UnityEngine;
 
 namespace Calluna.Persistence
 {
-    public class PersistentDataPathSaveLoader : SaveLoader, Injectable, Cleanable
+    /// <summary>
+    /// A <see cref="SaveLoader"/> that keeps all entries in one JSON file in
+    /// <c>Application.persistentDataPath</c>. Every change rewrites the file - within a batch
+    /// (see <see cref="GameDataPersistence"/>) only once, when the batch is committed.
+    /// <para>
+    /// The file stays open until <see cref="Clean"/>. Operations after <see cref="Clean"/> - e.g. a
+    /// final save that the DI cleanup runs after this loader's cleanup - still work, but read and
+    /// write the file in one go without keeping it open.
+    /// </para>
+    /// </summary>
+    public class PersistentDataPathSaveLoader : SaveLoader, IBatchableSaveLoader, Injectable, Cleanable
     {
         public event Action OnClear;
         private JsonSerializer _serializer;
         private TextFileReadWriter _textFileReadWriter;
         private string _fileName;
         private string _path;
+        private bool _isCleaned;
+        private bool _inBatch;
+        private bool _hasUnwrittenChanges;
 
         private Dictionary<string, JToken> _persistedData;
         private Dictionary<string, JToken> persistedData => _persistedData ??= ReadOrCreateData();
@@ -37,11 +50,15 @@ namespace Calluna.Persistence
         public void Clean()
         {
             ClearStreams();
+            _isCleaned = true;
         }
 
         public bool Has(string id)
         {
-            return _persistedData != null && _persistedData.ContainsKey(id);
+            // Don't create the file just to answer that it has no data.
+            if (_persistedData == null && !_textFileReadWriter.Has(_path))
+                return false;
+            return persistedData.ContainsKey(id);
         }
 
         public T Load<T>(string id, T defaultValue = default(T))
@@ -68,14 +85,39 @@ namespace Calluna.Persistence
             ClearStreams();
             _textFileReadWriter.Delete(_path);
             _persistedData = null;
+            _hasUnwrittenChanges = false;
             OnClear?.Invoke();
+        }
+
+        void IBatchableSaveLoader.BeginBatch()
+        {
+            _inBatch = true;
+        }
+
+        void IBatchableSaveLoader.CommitBatch()
+        {
+            _inBatch = false;
+            if (_hasUnwrittenChanges)
+                SaveData();
+        }
+
+        void IBatchableSaveLoader.RollbackBatch()
+        {
+            _inBatch = false;
+            if (!_hasUnwrittenChanges)
+                return;
+            // Drop the batch's changes - the file still holds the state before the batch.
+            _hasUnwrittenChanges = false;
+            _persistedData = null;
         }
 
         private Dictionary<string, JToken> ReadOrCreateData()
         {
             if (_textFileReadWriter.Has(_path))
             {
-                string text = _textFileReadWriter.ReadText(GetOrOpenStreams());
+                string text = _isCleaned
+                    ? _textFileReadWriter.ReadAllText(_path)
+                    : _textFileReadWriter.ReadText(GetOrOpenStreams());
                 return _serializer.Deserialize<Dictionary<string, JToken>>(text) ??
                        new Dictionary<string, JToken>();
             }
@@ -86,7 +128,18 @@ namespace Calluna.Persistence
 
         private void SaveData()
         {
-            _textFileReadWriter.Overwrite(GetOrOpenStreams(), _serializer.Serialize(persistedData));
+            if (_inBatch)
+            {
+                _hasUnwrittenChanges = true;
+                return;
+            }
+
+            _hasUnwrittenChanges = false;
+            string content = _serializer.Serialize(persistedData);
+            if (_isCleaned)
+                _textFileReadWriter.WriteAllText(_path, content);
+            else
+                _textFileReadWriter.Overwrite(GetOrOpenStreams(), content);
         }
 
         private (FileStream, StreamWriter, StreamReader) GetOrOpenStreams()

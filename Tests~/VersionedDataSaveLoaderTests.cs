@@ -6,7 +6,7 @@ using Moq;
 using NUnit.Framework;
 using UnityEngine;
 
-namespace Calluna.Template.Tests
+namespace Calluna.Persistence.Tests
 {
     /// <summary>
     /// Tests for <see cref="VersionedDataSaveLoader"/> and <see cref="VersionedDataMigrator{T}"/>.

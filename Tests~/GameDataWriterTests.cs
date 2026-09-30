@@ -10,7 +10,7 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
 
-namespace Calluna.Template.Tests
+namespace Calluna.Persistence.Tests
 {
     /// <summary>
     /// Direct unit tests for <see cref="GameDataWriter"/>.
@@ -369,6 +369,27 @@ namespace Calluna.Template.Tests
             writer.FlushPendingWrite();
 
             Assert.That(saveLoader.Has("epsilon"), Is.True);
+        }
+
+        // -----------------------------------------------------------------------
+        // 1.8.0 — Commit with deletions and an explicit version
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [Description("Commit() => writes and deletes in one batch and stores the given version.")]
+        public void Commit_WritesDeletesAndVersionInOneBatch()
+        {
+            FakeBatchableSaveLoader saveLoader = new FakeBatchableSaveLoader();
+            saveLoader.Save("obsolete", 1);
+            GameDataWriter writer = BuildWriter(saveLoader);
+
+            writer.Commit(MakeSnapshot("fresh"), new[] { "obsolete" }, 7);
+
+            Assert.That(saveLoader.Has("fresh"), Is.True);
+            Assert.That(saveLoader.Has("obsolete"), Is.False);
+            Assert.That(saveLoader.Has(GameDataPersistence.VersionKey), Is.True);
+            Assert.That(saveLoader.BeginBatchCallCount, Is.EqualTo(1));
+            Assert.That(saveLoader.CommitBatchCallCount, Is.EqualTo(1));
         }
     }
 }
