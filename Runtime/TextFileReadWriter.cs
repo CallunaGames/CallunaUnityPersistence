@@ -39,6 +39,10 @@ namespace Calluna.Persistence
             streams.Item1.Dispose();
         }
 
+        // One-shot access without keeping streams open.
+        internal string ReadAllText(string path) => File.ReadAllText(path);
+        internal void WriteAllText(string path, string content) => File.WriteAllText(path, content);
+
         internal void Create(string path) => File.CreateText(path).Close();
 
         internal void Delete(string path) => File.Delete(path);

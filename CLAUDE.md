@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Test
 
-There are no standalone build scripts. All compilation is handled by Unity. Tests run through Unity's Test Runner (Window > Testing > Test Runner). The test assembly is `Calluna.Template.Tests` located in `Tests~/`.
+There are no standalone build scripts. All compilation is handled by Unity. Tests run through Unity's Test Runner (Window > Testing > Test Runner). The test assembly is `Calluna.Persistence.Tests` (namespace `Calluna.Persistence.Tests`) located in `Tests~/`.
 
 To run tests via CLI: `Unity -runTests -testPlatform EditMode -projectPath <path>`
 
@@ -45,7 +45,7 @@ Uses `com.calluna.di` with interfaces: `Injectable`, `Initializable`, `Cleanable
 
 ### State & Error Handling
 
-`GameDataPersistence` exposes two `ReadonlyObservable<bool>` properties: `LoadingFailed` and `DataWasReset`. `Load()` and `Save()` catch all exceptions and log them; `Save()` is a no-op if `LoadingFailed` is true. Exception messages are acknowledged as insufficiently descriptive — prefer improving specificity when touching error paths.
+`GameDataPersistence` exposes two `ReadonlyObservable<bool>` properties: `LoadingFailed` and `DataWasReset`. `Load()` and `Save()` catch all exceptions and log them; `Save()` is a no-op if `LoadingFailed` is true, and waits for a pending `SaveAsync()` write first. SaveLoaders open lazily and, after `Clean()`, only use short-lived connections/file access (see README). Exception messages are acknowledged as insufficiently descriptive — prefer improving specificity when touching error paths.
 
 ### Editor Tooling
 

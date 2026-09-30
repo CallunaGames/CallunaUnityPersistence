@@ -32,8 +32,14 @@ namespace Calluna.Persistence
         private Dictionary<string, IDataSaveLoader> _saveLoaders = new Dictionary<string, IDataSaveLoader>();
         private List<IGameDataMigrator> _migrators;
         private List<GameDataStructureMigrationStep> _structureSteps;
-        private readonly Observable<bool> _loadFailed = false;
-        private readonly Observable<bool> _dataWasReset = false;
+        private readonly Observable<bool> _loadFailed = new Observable<bool>(false);
+        private readonly Observable<bool> _dataWasReset = new Observable<bool>(false);
+
+        // Set when stored data below MinSupportedVersion was reset: the next saves then write every
+        // loader, dirty or not. Otherwise a loader with dirty tracking would keep its stale stored
+        // data, which the new version key would then declare current. Cleared by the next
+        // successful Save().
+        private bool _saveAllLoaders;
 
         void Initializable.Initialize()
         {
@@ -67,6 +73,7 @@ namespace Calluna.Persistence
         {
             try
             {
+                _saveAllLoaders = false;
                 InitMigrators();
                 BuildSaveLoaderMap();
 
@@ -74,8 +81,7 @@ namespace Calluna.Persistence
 
                 if (!_saveLoader.Has(VersionKey))
                 {
-                    foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
-                        saveLoader.LoadDefault();
+                    LoadDefaults();
                     return;
                 }
 
@@ -86,8 +92,8 @@ namespace Calluna.Persistence
                     Debug.LogWarning(
                         $"The loaded data version {storedVersion} is below the minimum supported version {minSupportedVersion}. The game data was reset.");
                     _dataWasReset.Value = true;
-                    foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
-                        saveLoader.LoadDefault();
+                    LoadDefaults();
+                    _saveAllLoaders = true;
                     return;
                 }
 
@@ -95,10 +101,14 @@ namespace Calluna.Persistence
 
                 if (storedVersion < currentVersion)
                 {
+                    HashSet<string> keysBeforeMigration = new HashSet<string>(loadedData.Keys);
                     MigrateData(loadedData, storedVersion);
+                    // A slice a migrator removed must not stay in storage.
+                    keysBeforeMigration.ExceptWith(loadedData.Keys);
+                    List<(string Id, JToken Data)> migrated = new List<(string, JToken)>(loadedData.Count);
                     foreach (KeyValuePair<string, JToken> pair in loadedData)
-                        _saveLoader.Save(pair.Key, pair.Value);
-                    _saveLoader.Save(VersionKey, currentVersion);
+                        migrated.Add((pair.Key, pair.Value));
+                    _writer.Commit(migrated, keysBeforeMigration, currentVersion);
                 }
 
                 foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
@@ -116,6 +126,10 @@ namespace Calluna.Persistence
         /// Saves data from all dirty DataSaveLoaders synchronously on the calling thread.
         /// Loaders that report <c>IsDirty == false</c> are skipped.
         /// After a successful write all loaders are marked clean.
+        /// <para>
+        /// Waits for a background write started by <see cref="SaveAsync"/> first - otherwise that
+        /// write, holding an older snapshot, could finish after this one and overwrite newer data.
+        /// </para>
         /// </summary>
         public void Save()
         {
@@ -127,11 +141,13 @@ namespace Calluna.Persistence
 
             try
             {
+                _writer.FlushPendingWrite();
                 List<(string Id, JToken Data)> snapshot = SerializeDirtyLoaders();
                 _writer.CommitToStorage(snapshot);
 
                 foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
                     saveLoader.MarkClean();
+                _saveAllLoaders = false;
             }
             catch (Exception e)
             {
@@ -196,7 +212,8 @@ namespace Calluna.Persistence
 
         /// <summary>
         /// Saves custom data entries with a specific version. Use with caution!
-        /// Each entry in <paramref name="data"/> is stored as its own key in the underlying SaveLoader.
+        /// Each entry in <paramref name="data"/> is stored as its own key in the underlying SaveLoader,
+        /// in a single batch. Waits for a background write started by <see cref="SaveAsync"/> first.
         /// </summary>
         public void OverrideSave(Dictionary<string, JToken> data, int version)
         {
@@ -208,9 +225,11 @@ namespace Calluna.Persistence
 
             try
             {
+                _writer.FlushPendingWrite();
+                List<(string Id, JToken Data)> entries = new List<(string, JToken)>(data.Count);
                 foreach (KeyValuePair<string, JToken> pair in data)
-                    _saveLoader.Save(pair.Key, pair.Value);
-                _saveLoader.Save(VersionKey, version);
+                    entries.Add((pair.Key, pair.Value));
+                _writer.Commit(entries, null, version);
             }
             catch (Exception e)
             {
@@ -233,7 +252,7 @@ namespace Calluna.Persistence
             List<(string Id, JToken Data)> result = null;
             foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
             {
-                if (!saveLoader.IsDirty) continue;
+                if (!saveLoader.IsDirty && !_saveAllLoaders) continue;
                 JToken serialized = saveLoader.GetSerializedData();
                 result ??= new List<(string, JToken)>(_saveLoaders.Count);
                 result.Add((saveLoader.DataId, serialized));
@@ -244,6 +263,12 @@ namespace Calluna.Persistence
         // -----------------------------------------------------------------------
         // Private — load helpers
         // -----------------------------------------------------------------------
+
+        private void LoadDefaults()
+        {
+            foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
+                saveLoader.LoadDefault();
+        }
 
         private void BuildSaveLoaderMap()
         {

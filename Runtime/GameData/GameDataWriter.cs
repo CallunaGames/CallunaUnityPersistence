@@ -44,14 +44,23 @@ namespace Calluna.Persistence
         /// calling thread. Wraps all writes in a single batch transaction when the backend
         /// supports it so that only one disk sync is needed per save round.
         /// </summary>
-        internal void CommitToStorage(List<(string Id, JToken Data)> toWrite)
+        internal void CommitToStorage(List<(string Id, JToken Data)> toWrite) =>
+            Commit(toWrite, null, _currentVersion);
+
+        /// <summary>
+        /// Writes <paramref name="toWrite"/>, deletes <paramref name="toDelete"/> and stores
+        /// <paramref name="version"/> as the save version - in a single batch when the backend
+        /// supports it, so either all of it is stored or (on failure) nothing.
+        /// </summary>
+        internal void Commit(IReadOnlyCollection<(string Id, JToken Data)> toWrite,
+            IReadOnlyCollection<string> toDelete, int version)
         {
             if (_saveLoader is IBatchableSaveLoader batchable)
             {
+                batchable.BeginBatch();
                 try
                 {
-                    batchable.BeginBatch();
-                    WriteEntries(toWrite);
+                    WriteEntries(toWrite, toDelete, version);
                     batchable.CommitBatch();
                 }
                 catch
@@ -62,7 +71,7 @@ namespace Calluna.Persistence
             }
             else
             {
-                WriteEntries(toWrite);
+                WriteEntries(toWrite, toDelete, version);
             }
         }
 
@@ -121,12 +130,16 @@ namespace Calluna.Persistence
         // Private
         // -----------------------------------------------------------------------
 
-        private void WriteEntries(List<(string Id, JToken Data)> toWrite)
+        private void WriteEntries(IReadOnlyCollection<(string Id, JToken Data)> toWrite,
+            IReadOnlyCollection<string> toDelete, int version)
         {
             if (toWrite != null)
                 foreach ((string id, JToken data) in toWrite)
                     _saveLoader.Save(id, data);
-            _saveLoader.Save(GameDataPersistence.VersionKey, _currentVersion);
+            if (toDelete != null)
+                foreach (string id in toDelete)
+                    _saveLoader.Delete(id);
+            _saveLoader.Save(GameDataPersistence.VersionKey, version);
         }
 
         private void WriteSnapshotBackground(List<(string Id, JToken Data)> snapshot)
