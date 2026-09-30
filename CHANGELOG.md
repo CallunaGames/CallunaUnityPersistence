@@ -1,4 +1,4 @@
-## [1.8.0-pre.1] - 2026-09-30
+## [1.8.0] - 2026-09-30
 
 Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.5.2. Uses no API that core 2.0.0 removes.
 
