@@ -418,5 +418,34 @@ namespace Calluna.Persistence.Tests
             return Newtonsoft.Json.JsonConvert
                 .DeserializeObject<System.Collections.Generic.Dictionary<string, object>>(reader.ReadToEnd()).Keys;
         }
+
+        // -----------------------------------------------------------------------
+        // 1.9.0 — Archive (used by GameDataPersistence.RestoreBackup)
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [Description("Archive() => the file is moved aside with the suffix, and the loader is empty afterwards.")]
+        public void Archive_MovesFileAsideAndStartsEmpty()
+        {
+            _loader.Save("key", 1);
+            string archived = ActualPath + ".archived";
+
+            try
+            {
+                ((IArchivableSaveLoader)_loader).Archive(".archived");
+
+                Assert.That(File.Exists(archived), Is.True);
+                Assert.That(_loader.Has("key"), Is.False);
+
+                _loader.Save("other", 2);
+                Assert.That(_loader.Load<int>("other"), Is.EqualTo(2));
+            }
+            finally
+            {
+                ((Calluna.DI.Cleanable)_loader).Clean();
+                if (File.Exists(archived))
+                    File.Delete(archived);
+            }
+        }
     }
 }

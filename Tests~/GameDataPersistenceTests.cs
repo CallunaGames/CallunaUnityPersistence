@@ -692,54 +692,178 @@ namespace Calluna.Persistence.Tests
         }
 
         // -----------------------------------------------------------------------
-        // Load — individual DataSaveLoader.Load(JToken) throws => LoadDefault called, LoadingFailed stays false
+        // Load — a throwing DataSaveLoader fails the load (1.9.0; before: silent LoadDefault)
         // -----------------------------------------------------------------------
 
         private class ThrowingLoadStub : IDataSaveLoader
         {
             public string DataId { get; }
             public bool LoadDefaultCalled;
+            public bool ThrowOnLoadDefault;
 
             public ThrowingLoadStub(string id) => DataId = id;
 
             public void Load(JToken value) =>
                 throw new InvalidOperationException("Simulated per-loader load failure");
 
-            public void LoadDefault() => LoadDefaultCalled = true;
+            public void LoadDefault()
+            {
+                if (ThrowOnLoadDefault)
+                    throw new InvalidOperationException("Simulated per-loader default failure");
+                LoadDefaultCalled = true;
+            }
 
             public JToken GetSerializedData() => JToken.FromObject(new { value = 1 });
         }
 
-        [Test]
-        [TestCase("gdp_loaderload_throws_1")]
-        [TestCase("gdp_loaderload_throws_2")]
-        [Description("Load() when an individual DataSaveLoader.Load(JToken) throws => LoadDefault() is called for that loader and LoadingFailed stays false?")]
-        public void Load_IndividualLoaderLoadThrows_LoadDefaultCalledAndLoadingFailedStaysFalse(string gameDataId)
+        private static FakeSaveLoader StoreWithData(int version, params string[] ids)
         {
-            JsonSerializer serializer = BuildSerializer();
-            FakeSaveLoader saveLoader = new FakeSaveLoader();
+            FakeSaveLoader store = new FakeSaveLoader();
+            store.Save(GameDataPersistence.VersionKey, version);
+            foreach (string id in ids)
+                store.Save(id, JToken.FromObject(new { value = 7 }));
+            return store;
+        }
+
+        private static void ExpectLoadFailureLogs(int exceptions)
+        {
+            LogAssert.Expect(LogType.Error, new Regex("Failed to load game data"));
+            for (int i = 0; i < exceptions; i++)
+                LogAssert.Expect(LogType.Exception, new Regex("InvalidOperationException"));
+        }
+
+        [Test]
+        [Description("A DataSaveLoader throws => LoadingFailed, the loader gets no default (which the next save " +
+                     "would write over the real data), and the result names the failed data. Before 1.9.0 the " +
+                     "loader silently got its default and LoadingFailed stayed false.")]
+        public void Load_LoaderThrows_LoadingFailedWithoutDefault()
+        {
+            FakeSaveLoader store = StoreWithData(1, "throwData");
             ThrowingLoadStub throwingLoader = new ThrowingLoadStub("throwData");
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { throwingLoader });
 
-            // First, write data so the throwing loader's key exists and Load(JToken) is actually called.
-            StubDataSaveLoader seedLoader = new StubDataSaveLoader("throwData")
-            {
-                SerializedValue = JToken.FromObject(new { value = 7 })
-            };
-            GameDataPersistence seeder = BuildPersistence(
-                saveLoader, serializer, gameDataId, 0, 1,
-                new IDataSaveLoader[] { seedLoader });
-            seeder.Load();
-            seeder.Save();
+            ExpectLoadFailureLogs(1);
+            persistence.Load();
 
-            GameDataPersistence persistence = BuildPersistence(
-                saveLoader, serializer, gameDataId, 0, 1,
-                new IDataSaveLoader[] { throwingLoader });
+            Assert.That(persistence.LoadingFailed.Value, Is.True);
+            Assert.That(throwingLoader.LoadDefaultCalled, Is.False);
+            Assert.That(persistence.LastLoadResult.Failure, Is.EqualTo(GameDataLoadFailure.DataSaveLoader));
+            Assert.That(persistence.LastLoadResult.FailedDataIds, Is.EqualTo(new[] { "throwData" }));
+            Assert.That(persistence.LastLoadResult.StoredVersion, Is.EqualTo(1));
+        }
 
-            LogAssert.Expect(LogType.Error, new Regex("Failed to load data for 'throwData'"));
+        [Test]
+        [Description("Several DataSaveLoaders throw => every one is tried and reported, the others still load.")]
+        public void Load_SeveralLoadersThrow_AllReported()
+        {
+            FakeSaveLoader store = StoreWithData(1, "a", "b", "c");
+            StubDataSaveLoader working = new StubDataSaveLoader("b");
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1,
+                new IDataSaveLoader[] { new ThrowingLoadStub("a"), working, new ThrowingLoadStub("c") });
+
+            ExpectLoadFailureLogs(2);
+            persistence.Load();
+
+            Assert.That(persistence.LastLoadResult.FailedDataIds, Is.EquivalentTo(new[] { "a", "c" }));
+            Assert.That(persistence.LastLoadResult.Exceptions.Count, Is.EqualTo(2));
+            Assert.That(working.LoadCalled, Is.True);
+        }
+
+        [Test]
+        [Description("A DataSaveLoader throws in LoadDefault() (no save yet) => also a DataSaveLoader failure, not Storage.")]
+        public void Load_LoadDefaultThrows_DataSaveLoaderFailure()
+        {
+            ThrowingLoadStub throwingLoader = new ThrowingLoadStub("fresh") { ThrowOnLoadDefault = true };
+            GameDataPersistence persistence = BuildPersistence(new FakeSaveLoader(), 0, 1, new IDataSaveLoader[] { throwingLoader });
+
+            ExpectLoadFailureLogs(1);
+            persistence.Load();
+
+            Assert.That(persistence.LastLoadResult.Failure, Is.EqualTo(GameDataLoadFailure.DataSaveLoader));
+            Assert.That(persistence.LastLoadResult.StoredVersion, Is.Null);
+        }
+
+        [Test]
+        [Description("A DataSaveLoader throws after a migration => the migrated data is not written: the save keeps " +
+                     "its old version and data, so an older game version (or a backup) can still use it.")]
+        public void Load_LoaderThrowsAfterMigration_StorageUnchanged()
+        {
+            FakeSaveLoader store = StoreWithData(0, "throwData");
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1,
+                new IDataSaveLoader[] { new ThrowingLoadStub("throwData") },
+                new IGameDataMigrator[] { new StubGameDataMigrator(1) });
+
+            ExpectLoadFailureLogs(1);
+            persistence.Load();
+
+            Assert.That(store.Load<int>(GameDataPersistence.VersionKey), Is.EqualTo(0));
+            Assert.That(store.Has("__migrated__"), Is.False);
+        }
+
+        private class ThrowingMigrator : IGameDataMigrator
+        {
+            public int Version => 1;
+            public void Migrate(Dictionary<string, JToken> data) =>
+                throw new InvalidOperationException("Simulated migration failure");
+        }
+
+        [Test]
+        [Description("A migrator throws => Migration failure, nothing written, no loader called.")]
+        public void Load_MigratorThrows_MigrationFailureAndStorageUnchanged()
+        {
+            FakeSaveLoader store = StoreWithData(0, "data");
+            StubDataSaveLoader loader = new StubDataSaveLoader("data");
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1,
+                new IDataSaveLoader[] { loader }, new IGameDataMigrator[] { new ThrowingMigrator() });
+
+            ExpectLoadFailureLogs(1);
+            persistence.Load();
+
+            Assert.That(persistence.LastLoadResult.Failure, Is.EqualTo(GameDataLoadFailure.Migration));
+            Assert.That(persistence.LastLoadResult.StoredVersion, Is.EqualTo(0));
+            Assert.That(store.Load<int>(GameDataPersistence.VersionKey), Is.EqualTo(0));
+            Assert.That(loader.LoadCalled || loader.LoadDefaultCalled, Is.False);
+        }
+
+        [Test]
+        [Description("The SaveLoader throws while reading => Storage failure.")]
+        public void Load_StorageThrows_StorageFailure()
+        {
+            FakeSaveLoader store = StoreWithData(1, "data");
+            store.ThrowOnLoad = true;
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { new StubDataSaveLoader("data") });
+
+            ExpectLoadFailureLogs(1);
+            persistence.Load();
+
+            Assert.That(persistence.LastLoadResult.Failure, Is.EqualTo(GameDataLoadFailure.Storage));
+        }
+
+        [Test]
+        [Description("Two DataSaveLoaders share an id => Configuration failure.")]
+        public void Load_DuplicateDataId_ConfigurationFailure()
+        {
+            GameDataPersistence persistence = BuildPersistence(new FakeSaveLoader(), 0, 1,
+                new IDataSaveLoader[] { new StubDataSaveLoader("same"), new StubDataSaveLoader("same") });
+
+            LogAssert.Expect(LogType.Error, new Regex("Failed to load game data"));
             LogAssert.Expect(LogType.Exception, new Regex("InvalidOperationException"));
             persistence.Load();
 
-            Assert.That(throwingLoader.LoadDefaultCalled, Is.True);
+            Assert.That(persistence.LastLoadResult.Failure, Is.EqualTo(GameDataLoadFailure.Configuration));
+        }
+
+        [Test]
+        [Description("A successful load => LastLoadResult succeeded with the stored version.")]
+        public void Load_Success_ResultSucceededWithStoredVersion()
+        {
+            FakeSaveLoader store = StoreWithData(1, "data");
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { new StubDataSaveLoader("data") });
+
+            persistence.Load();
+
+            Assert.That(persistence.LastLoadResult.Succeeded, Is.True);
+            Assert.That(persistence.LastLoadResult.StoredVersion, Is.EqualTo(1));
             Assert.That(persistence.LoadingFailed.Value, Is.False);
         }
 
