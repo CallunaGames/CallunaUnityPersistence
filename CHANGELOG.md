@@ -1,3 +1,16 @@
+## [1.9.0-pre.1] - 2026-09-30
+
+### Added
+- **Backups.** Every successful `GameDataPersistence.Load()` backs up the loaded data as a JSON file (background thread, atomic write). A load that migrated also backs up the data before the migration under its old save version. Retention per save version: the newest N (default 3) plus the newest backup of the previous game build; the newest M save versions (default 3) up to the current one; backups of newer save versions are never deleted. A failed load creates and deletes no backups. Configured in `GameDataInstaller`: Create Backups, Backups Per Version, Backup Versions Kept, Backup Folder.
+- `GameDataPersistence.GetBackups()` and `RestoreBackup(GameDataBackup)`: restore a backup after a failed load. The replaced save is kept aside (`<file>.before-restore-<time>`) by `SqliteSaveLoader` and `PersistentDataPathSaveLoader`; the backup is not modified. Saving is blocked until the next `Load()`.
+- `GameDataPersistence.LastLoadResult` (`GameDataLoadResult`): why loading failed - `Configuration`, `Storage`, `Migration` or `DataSaveLoader` - with the ids of the failed loaders, the stored version and the exceptions.
+
+### Changed
+- **A throwing `DataSaveLoader` now fails the load** (`LoadingFailed = true`). Before, the loader silently got its default data, `LoadingFailed` stayed `false`, and the next save wrote the default over the real data. All loaders are still tried, so every failure is reported.
+- **A failed load writes nothing.** Migrated data is only stored once every `DataSaveLoader` has loaded it - before, it was written before the loaders ran, so a failing loader left the save migrated to a version the previous game version can't load.
+
+---
+
 ## [1.8.0] - 2026-09-30
 
 Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.5.2. Uses no API that core 2.0.0 removes.

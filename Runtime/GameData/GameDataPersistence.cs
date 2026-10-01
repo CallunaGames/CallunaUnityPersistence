@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Calluna.DI;
 using Newtonsoft.Json.Linq;
@@ -41,6 +42,12 @@ namespace Calluna.Persistence
         // successful Save().
         private bool _saveAllLoaders;
 
+        // Null when backups are disabled.
+        private GameDataBackupStore _backups;
+        // Set by RestoreBackup: the loaded (possibly broken) state must not be saved over the restored
+        // data. Cleared by the next Load().
+        private bool _backupRestored;
+
         void Initializable.Initialize()
         {
             _loadFailed.Value = false;
@@ -53,6 +60,7 @@ namespace Calluna.Persistence
             _saveLoader = resolver.Resolve<SaveLoader>();
             _serializer = resolver.Resolve<JsonSerializer>();
             _writer = resolver.Resolve<GameDataWriter>();
+            _backups = _arguments.Backups != null ? new GameDataBackupStore(_arguments.Backups) : null;
 
             // Structure migration steps are only used when reading the legacy single-blob format
             // produced by versions prior to v1.6. Add a new step here if the blob schema changes.
@@ -63,63 +71,33 @@ namespace Calluna.Persistence
             _structureSteps.Sort((a, b) => a.TargetVersion.CompareTo(b.TargetVersion));
         }
 
+        /// <summary>The outcome of the last <see cref="Load"/>, including what failed.</summary>
+        public GameDataLoadResult LastLoadResult { get; private set; } = GameDataLoadResult.NotLoaded;
+
         /// <summary>
         /// Loads the saved GameData. Uses the default value of each DataSaveLoader if no data is found.
         /// Resets data if the stored version is below MinSupportedVersion.
         /// On first load after upgrading from v1.5 or earlier, automatically migrates the legacy
         /// single-blob format to the new per-key format transparently.
+        /// <para>
+        /// Loading fails - <see cref="LoadingFailed"/> becomes true and <see cref="LastLoadResult"/>
+        /// tells why - if the data can't be read, a migrator throws or any DataSaveLoader throws. All
+        /// DataSaveLoaders are still tried, so every failed one is reported. A failed load writes
+        /// nothing: migrated data is only stored once every DataSaveLoader has loaded it.
+        /// </para>
         /// </summary>
         public void Load()
         {
-            try
-            {
-                _saveAllLoaders = false;
-                InitMigrators();
-                BuildSaveLoaderMap();
+            _saveAllLoaders = false;
+            _backupRestored = false;
+            LastLoadResult = LoadData();
+            if (LastLoadResult.Succeeded)
+                return;
 
-                MigrateFromLegacyBlobIfNeeded();
-
-                if (!_saveLoader.Has(VersionKey))
-                {
-                    LoadDefaults();
-                    return;
-                }
-
-                int storedVersion = _saveLoader.Load<int>(VersionKey, 0);
-
-                if (storedVersion < minSupportedVersion)
-                {
-                    Debug.LogWarning(
-                        $"The loaded data version {storedVersion} is below the minimum supported version {minSupportedVersion}. The game data was reset.");
-                    _dataWasReset.Value = true;
-                    LoadDefaults();
-                    _saveAllLoaders = true;
-                    return;
-                }
-
-                Dictionary<string, JToken> loadedData = LoadAllData();
-
-                if (storedVersion < currentVersion)
-                {
-                    HashSet<string> keysBeforeMigration = new HashSet<string>(loadedData.Keys);
-                    MigrateData(loadedData, storedVersion);
-                    // A slice a migrator removed must not stay in storage.
-                    keysBeforeMigration.ExceptWith(loadedData.Keys);
-                    List<(string Id, JToken Data)> migrated = new List<(string, JToken)>(loadedData.Count);
-                    foreach (KeyValuePair<string, JToken> pair in loadedData)
-                        migrated.Add((pair.Key, pair.Value));
-                    _writer.Commit(migrated, keysBeforeMigration, currentVersion);
-                }
-
-                foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
-                    TryLoadData(saveLoader, loadedData);
-            }
-            catch (Exception e)
-            {
-                _loadFailed.Value = true;
-                Debug.LogError($"Failed to load game data '{_arguments.GameDataId}'");
-                Debug.LogException(e);
-            }
+            _loadFailed.Value = true;
+            Debug.LogError($"Failed to load game data '{_arguments.GameDataId}': {LastLoadResult}");
+            foreach (Exception exception in LastLoadResult.Exceptions)
+                Debug.LogException(exception);
         }
 
         /// <summary>
@@ -138,6 +116,8 @@ namespace Calluna.Persistence
                 Debug.LogError("Save was aborted since loading of the GameData failed initially");
                 return;
             }
+            if (IsBlockedByRestore("Save"))
+                return;
 
             try
             {
@@ -183,6 +163,8 @@ namespace Calluna.Persistence
                 Debug.LogError("SaveAsync was aborted since loading of the GameData failed initially");
                 return Task.CompletedTask;
             }
+            if (IsBlockedByRestore("SaveAsync"))
+                return Task.CompletedTask;
 
             List<(string Id, JToken Data)> snapshot;
             try
@@ -208,6 +190,57 @@ namespace Calluna.Persistence
         public void FlushPendingWrite()
         {
             _writer.FlushPendingWrite();
+            _backups?.FlushPendingWrite();
+        }
+
+        /// <summary>
+        /// The backups that can be restored - save versions from MinSupportedVersion up to the current
+        /// one - newest first. Empty if backups are disabled.
+        /// </summary>
+        public IReadOnlyList<GameDataBackup> GetBackups()
+        {
+            if (_backups == null)
+                return Array.Empty<GameDataBackup>();
+            return _backups.List()
+                .Where(backup => backup.SaveVersion >= minSupportedVersion && backup.SaveVersion <= currentVersion)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Replaces the stored game data with <paramref name="backup"/>. The replaced data is kept next to
+        /// the save (e.g. <c>Lofelia.db.before-restore-&lt;time&gt;</c>) where the SaveLoader supports it.
+        /// The backup itself stays unchanged, so it can be restored again if loading it fails.
+        /// <para>
+        /// The data in memory is the replaced one, so saving is blocked until the next <see cref="Load"/>:
+        /// reload the game data (e.g. restart the game) right after restoring.
+        /// </para>
+        /// </summary>
+        /// <exception cref="InvalidOperationException">Backups are disabled.</exception>
+        /// <exception cref="ArgumentException">The backup's save version can't be loaded by this game version.</exception>
+        /// <exception cref="Exception">The backup can't be read or written - the stored data is then unchanged
+        /// unless the SaveLoader already kept it aside.</exception>
+        public void RestoreBackup(GameDataBackup backup)
+        {
+            if (_backups == null)
+                throw new InvalidOperationException("Game data backups are disabled.");
+            if (backup.SaveVersion < minSupportedVersion || backup.SaveVersion > currentVersion)
+                throw new ArgumentException(
+                    $"{backup} can't be loaded: supported save versions are {minSupportedVersion} to {currentVersion}.",
+                    nameof(backup));
+
+            FlushPendingWrite();
+            Dictionary<string, JToken> data = _backups.ReadData(backup);
+
+            if (_saveLoader is IArchivableSaveLoader archivable)
+                archivable.Archive($".before-restore-{DateTime.Now:yyyyMMdd_HHmmss}");
+
+            // Data the backup doesn't have must not survive from the replaced save.
+            HashSet<string> toDelete = new HashSet<string>(_arguments.SaveLoaders.Select(loader => loader.DataId));
+            toDelete.ExceptWith(data.Keys);
+            List<(string Id, JToken Data)> entries = data.Select(pair => (pair.Key, pair.Value)).ToList();
+            _writer.Commit(entries, toDelete, backup.SaveVersion);
+            _backupRestored = true;
+            Debug.Log($"Restored game data '{_arguments.GameDataId}' from {backup}.");
         }
 
         /// <summary>
@@ -222,6 +255,8 @@ namespace Calluna.Persistence
                 Debug.LogError("Override save was aborted since loading of the GameData failed initially");
                 return;
             }
+            if (IsBlockedByRestore("OverrideSave"))
+                return;
 
             try
             {
@@ -264,10 +299,150 @@ namespace Calluna.Persistence
         // Private — load helpers
         // -----------------------------------------------------------------------
 
-        private void LoadDefaults()
+        private GameDataLoadResult LoadData()
         {
+            try
+            {
+                InitMigrators();
+                BuildSaveLoaderMap();
+            }
+            catch (Exception e)
+            {
+                return GameDataLoadResult.Failed(GameDataLoadFailure.Configuration, null, e);
+            }
+
+            int? storedVersion = null;
+            Dictionary<string, JToken> loadedData;
+            try
+            {
+                MigrateFromLegacyBlobIfNeeded();
+                if (_saveLoader.Has(VersionKey))
+                    storedVersion = _saveLoader.Load<int>(VersionKey, 0);
+                loadedData = storedVersion >= minSupportedVersion
+                    ? LoadAllData()
+                    : new Dictionary<string, JToken>();
+            }
+            catch (Exception e)
+            {
+                return GameDataLoadResult.Failed(GameDataLoadFailure.Storage, storedVersion, e);
+            }
+
+            // No save yet, or one too old to migrate: every loader gets its default.
+            if (storedVersion == null || storedVersion < minSupportedVersion)
+            {
+                if (storedVersion != null)
+                {
+                    Debug.LogWarning(
+                        $"The loaded data version {storedVersion} is below the minimum supported version {minSupportedVersion}. The game data was reset.");
+                    _dataWasReset.Value = true;
+                    _saveAllLoaders = true;
+                }
+                return DispatchToLoaders(loadedData, storedVersion);
+            }
+
+            bool migrate = storedVersion < currentVersion;
+            // The state before a migration is the last one the previous game version can load - backed
+            // up as well, once the load succeeded.
+            Dictionary<string, JToken> beforeMigration = migrate && _backups != null ? DeepClone(loadedData) : null;
+            HashSet<string> removedByMigration = null;
+            if (migrate)
+            {
+                try
+                {
+                    removedByMigration = new HashSet<string>(loadedData.Keys);
+                    MigrateData(loadedData, storedVersion.Value);
+                    removedByMigration.ExceptWith(loadedData.Keys);
+                }
+                catch (Exception e)
+                {
+                    return GameDataLoadResult.Failed(GameDataLoadFailure.Migration, storedVersion, e);
+                }
+            }
+
+            GameDataLoadResult loaderResult = DispatchToLoaders(loadedData, storedVersion);
+            if (!loaderResult.Succeeded)
+                return loaderResult;
+
+            if (migrate)
+            {
+                try
+                {
+                    // A slice a migrator removed must not stay in storage.
+                    List<(string Id, JToken Data)> migrated = new List<(string, JToken)>(loadedData.Count);
+                    foreach (KeyValuePair<string, JToken> pair in loadedData)
+                        migrated.Add((pair.Key, pair.Value));
+                    _writer.Commit(migrated, removedByMigration, currentVersion);
+                }
+                catch (Exception e)
+                {
+                    return GameDataLoadResult.Failed(GameDataLoadFailure.Storage, storedVersion, e);
+                }
+            }
+
+            CreateBackups(loadedData, beforeMigration, storedVersion.Value);
+            return GameDataLoadResult.Success(storedVersion);
+        }
+
+        // Only after a successful load: the data is known to be loadable. A failed load creates no
+        // backup and removes none, so the existing ones stay until a load succeeds again.
+        private void CreateBackups(Dictionary<string, JToken> loadedData, Dictionary<string, JToken> beforeMigration,
+            int storedVersion)
+        {
+            if (_backups == null)
+                return;
+            try
+            {
+                List<(int, Dictionary<string, JToken>)> backups = new List<(int, Dictionary<string, JToken>)>(2)
+                {
+                    // Without a migration the data keeps its stored version (newer than the current
+                    // one if an older game version loads a newer save).
+                    (beforeMigration != null ? currentVersion : storedVersion, loadedData)
+                };
+                if (beforeMigration != null)
+                    backups.Add((storedVersion, beforeMigration));
+                _backups.CreateAsync(backups, currentVersion, Application.version, DateTime.UtcNow);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"Failed to back up game data '{_arguments.GameDataId}': {e}");
+            }
+        }
+
+        private static Dictionary<string, JToken> DeepClone(Dictionary<string, JToken> data) =>
+            data.ToDictionary(pair => pair.Key, pair => pair.Value.DeepClone());
+
+        private bool IsBlockedByRestore(string operation)
+        {
+            if (!_backupRestored)
+                return false;
+            Debug.LogWarning($"{operation} was skipped: a backup was restored, reload the game data before saving.");
+            return true;
+        }
+
+        // Tries every loader, so all failures are reported, not only the first.
+        private GameDataLoadResult DispatchToLoaders(Dictionary<string, JToken> loadedData, int? storedVersion)
+        {
+            List<string> failedIds = null;
+            List<Exception> exceptions = null;
             foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
-                saveLoader.LoadDefault();
+            {
+                try
+                {
+                    if (loadedData.TryGetValue(saveLoader.DataId, out JToken serializedData))
+                        saveLoader.Load(serializedData);
+                    else
+                        saveLoader.LoadDefault();
+                }
+                catch (Exception e)
+                {
+                    (failedIds ??= new List<string>()).Add(saveLoader.DataId);
+                    (exceptions ??= new List<Exception>()).Add(e);
+                }
+            }
+
+            return failedIds == null
+                ? GameDataLoadResult.Success(storedVersion)
+                : new GameDataLoadResult(GameDataLoadFailure.DataSaveLoader, storedVersion, failedIds, exceptions);
         }
 
         private void BuildSaveLoaderMap()
@@ -356,23 +531,6 @@ namespace Calluna.Persistence
             }
         }
 
-        private void TryLoadData(IDataSaveLoader saveLoader, Dictionary<string, JToken> loadedData)
-        {
-            try
-            {
-                if (loadedData.TryGetValue(saveLoader.DataId, out JToken serializedData))
-                    saveLoader.Load(serializedData);
-                else
-                    saveLoader.LoadDefault();
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"Failed to load data for '{saveLoader.DataId}'. Loading default instead.");
-                Debug.LogException(e);
-                saveLoader.LoadDefault();
-            }
-        }
-
         private static void ValidateVersions(IReadOnlyList<IGameDataMigrator> migrators)
         {
             HashSet<int> versions = new HashSet<int>(migrators.Count);
@@ -397,6 +555,9 @@ namespace Calluna.Persistence
             public int CurrentVersion;
             public IReadOnlyList<IGameDataMigrator> Migrators;
             public IReadOnlyList<IDataSaveLoader> SaveLoaders;
+
+            /// <summary>Null disables backups.</summary>
+            public GameDataBackupStore.Settings Backups;
         }
     }
 }

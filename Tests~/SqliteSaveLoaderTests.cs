@@ -518,5 +518,36 @@ namespace Calluna.Persistence.Tests
 
             Assert.That(_loader.Has("a"), Is.False);
         }
+
+        // -----------------------------------------------------------------------
+        // 1.9.0 — Archive (used by GameDataPersistence.RestoreBackup)
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [Description("Archive() => the database is moved aside with the suffix, and the next write starts a new one.")]
+        public void Archive_MovesDatabaseAsideAndStartsEmpty()
+        {
+            _loader.Save("key", 1);
+            string archived = ActualPath + ".archived";
+
+            try
+            {
+                ((IArchivableSaveLoader)_loader).Archive(".archived");
+
+                Assert.That(File.Exists(archived), Is.True);
+                Assert.That(File.Exists(ActualPath), Is.False);
+                Assert.That(_loader.Has("key"), Is.False);
+
+                _loader.Save("other", 2);
+                Assert.That(_loader.Load<int>("other"), Is.EqualTo(2));
+            }
+            finally
+            {
+                ((Cleanable)_loader).Clean();
+                DeleteIfExists(archived);
+                DeleteIfExists(archived + "-wal");
+                DeleteIfExists(archived + "-shm");
+            }
+        }
     }
 }

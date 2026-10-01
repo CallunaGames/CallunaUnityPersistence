@@ -221,19 +221,45 @@ class GameDataPersistence : Injectable, Initializable
 ```csharp
 ReadonlyObservable<bool> LoadingFailed { get; }
 ReadonlyObservable<bool> DataWasReset  { get; }
+GameDataLoadResult LastLoadResult { get; }
 
 void Load();
 void Save();
 Task SaveAsync();
 void FlushPendingWrite();
 void OverrideSave(Dictionary<string, JToken> data, int version);
+
+IReadOnlyList<GameDataBackup> GetBackups();
+void RestoreBackup(GameDataBackup backup);
 ```
 
-- `Load()` loads each `DataSaveLoader`'s key individually, applies any pending `GameDataMigrator` steps in ascending version order, and dispatches data to each loader. The migrated data is written back in one batch; a slice a migrator removed from the dictionary is deleted from storage. If the stored version is below `MinSupportedVersion` all data is discarded, defaults are used, and `DataWasReset` is set to `true` - the next `Save()` then writes every loader, dirty or not, so no stale data survives under the new version. If any exception is thrown during load, `LoadingFailed` is set to `true`.
+- `Load()` loads each `DataSaveLoader`'s key individually, applies any pending `GameDataMigrator` steps in ascending version order, and dispatches data to each loader. The migrated data is written back in one batch; a slice a migrator removed from the dictionary is deleted from storage. If the stored version is below `MinSupportedVersion` all data is discarded, defaults are used, and `DataWasReset` is set to `true` - the next `Save()` then writes every loader, dirty or not, so no stale data survives under the new version. Loading fails - `LoadingFailed` becomes `true` and `LastLoadResult` tells why (`Configuration`, `Storage`, `Migration` or `DataSaveLoader` with the ids of the failed loaders) - if the data can't be read, a migrator throws or **any** `DataSaveLoader` throws. All loaders are still tried, so every failed one is reported. A failed load writes nothing: migrated data is only stored once every loader has loaded it, so the save keeps its old version and data. On success a backup is created (see *Backups* below).
 - `Save()` is a no-op when `LoadingFailed` is `true`. It first waits for a background write started by `SaveAsync()`, so an older queued snapshot can't overwrite the newer data. Only loaders where `IsDirty == true` are serialised. All dirty loaders are serialised before anything is written — if any serialisation fails the entire write is aborted, leaving storage unchanged. After a successful write, `MarkClean()` is called on every loader.
 - `SaveAsync()` serialises dirty loaders on the calling (main) thread, then dispatches the write to a background thread so the caller is not blocked by I/O. Fire-and-forget is safe; await the returned `Task` only if you need to react to completion. **Dirty flags are not cleared after an async save** — the final synchronous `Save()` on DI cleanup handles that. Falls back to a synchronous write (with a one-time warning) when the underlying `SaveLoader` requires main-thread access (e.g. `PlayerPrefsSaveLoader`) or the platform does not support background threads (WebGL). When using `SqliteSaveLoader` with `SaveAsync()`, enable the **Full Mutex** toggle in `SqliteSaveLoaderInstaller`.
 - `FlushPendingWrite()` blocks the calling thread until any in-progress background write started by `SaveAsync()` completes. Called automatically by the DI cleanup path before the final `Save()`, so no write is lost on scene teardown. You only need to call this manually if you are managing the DI lifecycle yourself.
 - `OverrideSave()` writes each entry in the supplied dictionary as its own key and updates `__version__`, in one batch after waiting for a background write; use with care. Also a no-op when `LoadingFailed` is `true`.
+
+### Backups
+
+With **Create Backups** enabled in `GameDataInstaller` (the default), every successful `Load()` backs up the loaded data as a JSON file in the backup folder - written on a background thread, atomically (a quit mid-write never leaves a truncated backup). If the load migrated the data, the state before the migration is backed up as well, under its old save version - the last state the previous game version can load.
+
+Only a successful load creates backups, and only then are old ones rotated away: while loading fails, the existing backups stay unchanged. Retention per save version: the newest **Backups Per Version**, plus the newest backup of the game build (`Application.version`) before the latest one - so a buggy release that doesn't change the save version can't rotate away the last good build's backup. Backups are kept for the newest **Backup Versions Kept** save versions up to the current one; backups of a newer save version (from a newer game, after a downgrade) are never deleted.
+
+When loading failed, offer the player to restore one:
+
+```csharp
+if (_persistence.LoadingFailed.Value)
+{
+    IReadOnlyList<GameDataBackup> backups = _persistence.GetBackups(); // newest first
+    // Let the player choose, e.g. "Load backup from {backups[0].CreatedUtc.ToLocalTime()}" / "Start over" / "Quit".
+    _persistence.RestoreBackup(backups[0]);
+    // The data in memory is the broken one - reload, e.g. restart the game.
+}
+```
+
+- `GetBackups()` returns the backups this game version can load (save versions from `MinSupportedVersion` to `CurrentVersion`), newest first.
+- `RestoreBackup()` replaces the stored data with the backup's. `SqliteSaveLoader` and `PersistentDataPathSaveLoader` keep the replaced save next to it (e.g. `SaveData.db.before-restore-20260930_191500`) for support. The backup file itself is not modified, so it can be restored again if loading it fails too. Afterwards saving is blocked until the next `Load()`, so the replaced in-memory state can't be written over the restored data - reload the game data right away.
+- Keep the backup folder out of cloud sync if the save folder is synced (e.g. a Steam Auto-Cloud exclusion, or an absolute folder outside the synced one).
 
 ### Usage — async saves
 
@@ -282,6 +308,10 @@ public class AutoSaveTrigger : MonoBehaviour, Injectable
 | Save Loaders | *(empty)* | `DataSaveLoader` MonoBehaviours whose data is included in the blob. |
 | Load Data On Init | `true` | Automatically calls `Load()` during DI initialisation. |
 | Save Data On Clean | `true` | Automatically calls `Save()` during DI cleanup. |
+| Create Backups | `true` | Backs up the game data after every successful load (see *Backups*). |
+| Backups Per Version | `3` | Backups kept per save data version (plus the newest backup of the previous build). |
+| Backup Versions Kept | `3` | Save data versions to keep backups of. |
+| Backup Folder | `Backups` | Relative to `Application.persistentDataPath`, or absolute. |
 
 ### DataSaveLoader
 

@@ -25,7 +25,7 @@ namespace Calluna.Persistence
     /// </para>
     /// <para><b>Platform note:</b> WebGL is not supported.</para>
     /// </summary>
-    public class SqliteSaveLoader : SaveLoader, IBatchableSaveLoader, Injectable, Cleanable
+    public class SqliteSaveLoader : SaveLoader, IBatchableSaveLoader, IArchivableSaveLoader, Injectable, Cleanable
     {
         [Table("entries")]
         private class Entry
@@ -170,6 +170,21 @@ namespace Calluna.Persistence
             DeleteDatabaseFiles(_path);
             OnClear?.Invoke();
         }
+
+        void IArchivableSaveLoader.Archive(string suffix)
+        {
+            CloseConnection();
+            // Closing the last connection checkpoints the WAL, but a crashed session may have left
+            // -wal/-shm files - they belong to the archived database.
+            foreach (string file in new[] { _path, _path + "-wal", _path + "-shm" })
+            {
+                if (File.Exists(file))
+                    File.Move(file, InsertSuffix(file, suffix));
+            }
+        }
+
+        // "Save.db-wal" + ".x" => "Save.db.x-wal", so the archived journal still sits next to its database.
+        private string InsertSuffix(string file, string suffix) => _path + suffix + file.Substring(_path.Length);
 
         // -----------------------------------------------------------------------
         // Private

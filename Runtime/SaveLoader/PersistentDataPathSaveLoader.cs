@@ -17,7 +17,7 @@ namespace Calluna.Persistence
     /// write the file in one go without keeping it open.
     /// </para>
     /// </summary>
-    public class PersistentDataPathSaveLoader : SaveLoader, IBatchableSaveLoader, Injectable, Cleanable
+    public class PersistentDataPathSaveLoader : SaveLoader, IBatchableSaveLoader, IArchivableSaveLoader, Injectable, Cleanable
     {
         public event Action OnClear;
         private JsonSerializer _serializer;
@@ -87,6 +87,15 @@ namespace Calluna.Persistence
             _persistedData = null;
             _hasUnwrittenChanges = false;
             OnClear?.Invoke();
+        }
+
+        void IArchivableSaveLoader.Archive(string suffix)
+        {
+            ClearStreams();
+            if (_textFileReadWriter.Has(_path))
+                File.Move(_path, _path + suffix);
+            _persistedData = null;
+            _hasUnwrittenChanges = false;
         }
 
         void IBatchableSaveLoader.BeginBatch()
