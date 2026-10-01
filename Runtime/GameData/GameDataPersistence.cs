@@ -231,8 +231,7 @@ namespace Calluna.Persistence
             FlushPendingWrite();
             Dictionary<string, JToken> data = _backups.ReadData(backup);
 
-            if (_saveLoader is IArchivableSaveLoader archivable)
-                archivable.Archive($".before-restore-{DateTime.Now:yyyyMMdd_HHmmss}");
+            ArchiveStoredData("before-restore");
 
             // Data the backup doesn't have must not survive from the replaced save.
             HashSet<string> toDelete = new HashSet<string>(_arguments.SaveLoaders.Select(loader => loader.DataId));
@@ -406,6 +405,23 @@ namespace Calluna.Persistence
             {
                 Debug.LogWarning($"Failed to back up game data '{_arguments.GameDataId}': {e}");
             }
+        }
+
+        /// <summary>
+        /// Keeps the stored game data aside instead of losing it - e.g. before starting over after a
+        /// failed load, so the broken save is still available for support. The data is moved to
+        /// <c>&lt;file&gt;.&lt;label&gt;-&lt;time&gt;</c> (e.g. <c>Lofelia.db.before-start-over-20261001_134500</c>);
+        /// afterwards the SaveLoader is empty, as after <see cref="SaveLoader.Clear"/> - but without
+        /// raising <see cref="SaveLoader.OnClear"/>.
+        /// </summary>
+        /// <returns>False if the SaveLoader can't keep data aside (e.g. PlayerPrefs) - nothing changed then.</returns>
+        public bool ArchiveStoredData(string label)
+        {
+            if (_saveLoader is not IArchivableSaveLoader archivable)
+                return false;
+            FlushPendingWrite();
+            archivable.Archive($".{label}-{DateTime.Now:yyyyMMdd_HHmmss}");
+            return true;
         }
 
         private static Dictionary<string, JToken> DeepClone(Dictionary<string, JToken> data) =>

@@ -359,6 +359,36 @@ namespace Calluna.Persistence.Tests
             Assert.That(store.Load<int>("a"), Is.EqualTo(-5), "Saving works again after the load.");
         }
 
+        private class ArchivingStore : MemoryStore, IArchivableSaveLoader
+        {
+            public string ArchivedWith;
+            public void Archive(string suffix) => ArchivedWith = suffix;
+        }
+
+        [Test]
+        [Description("ArchiveStoredData => the SaveLoader keeps its data aside under the label plus a timestamp.")]
+        public void ArchiveStoredData_ArchivableStore_ArchivesWithLabel()
+        {
+            ArchivingStore store = new ArchivingStore();
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[0]);
+
+            bool archived = persistence.ArchiveStoredData("before-start-over");
+
+            Assert.That(archived, Is.True);
+            Assert.That(store.ArchivedWith, Does.Match(@"^\.before-start-over-\d{8}_\d{6}$"));
+        }
+
+        [Test]
+        [Description("ArchiveStoredData with a SaveLoader that can't keep data aside => false, nothing changed.")]
+        public void ArchiveStoredData_NotArchivable_ReturnsFalse()
+        {
+            MemoryStore store = StoreWith(1, 7);
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[0]);
+
+            Assert.That(persistence.ArchiveStoredData("before-start-over"), Is.False);
+            Assert.That(store.Load<int>("a"), Is.EqualTo(7));
+        }
+
         [Test]
         [Description("RestoreBackup with a save version this game can't load => ArgumentException, nothing changed.")]
         public void RestoreBackup_UnsupportedVersion_Throws()

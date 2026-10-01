@@ -1,3 +1,8 @@
+## [1.9.0-pre.2] - 2026-10-01
+
+### Added
+- `GameDataPersistence.ArchiveStoredData(label)`: keeps the stored data aside (`<file>.<label>-<time>`) instead of losing it - e.g. before starting over after a failed load, so the broken save is still available for support. Returns false if the SaveLoader can't do that (PlayerPrefs). `RestoreBackup` uses it with the label `before-restore`.
+
 ## [1.9.0-pre.1] - 2026-09-30
 
 ### Added

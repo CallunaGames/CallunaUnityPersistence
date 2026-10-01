@@ -259,6 +259,7 @@ if (_persistence.LoadingFailed.Value)
 
 - `GetBackups()` returns the backups this game version can load (save versions from `MinSupportedVersion` to `CurrentVersion`), newest first.
 - `RestoreBackup()` replaces the stored data with the backup's. `SqliteSaveLoader` and `PersistentDataPathSaveLoader` keep the replaced save next to it (e.g. `SaveData.db.before-restore-20260930_191500`) for support. The backup file itself is not modified, so it can be restored again if loading it fails too. Afterwards saving is blocked until the next `Load()`, so the replaced in-memory state can't be written over the restored data - reload the game data right away.
+- `ArchiveStoredData(label)` keeps the stored data aside the same way without restoring anything - e.g. before starting over (`SaveLoader.Clear()`) after a failed load, so the broken save isn't lost.
 - Keep the backup folder out of cloud sync if the save folder is synced (e.g. a Steam Auto-Cloud exclusion, or an absolute folder outside the synced one).
 
 ### Usage — async saves
