@@ -1,13 +1,11 @@
-## [1.9.0-pre.2] - 2026-10-01
+## [1.9.0] - 2026-10-01
 
-### Added
-- `GameDataPersistence.ArchiveStoredData(label)`: keeps the stored data aside (`<file>.<label>-<time>`) instead of losing it - e.g. before starting over after a failed load, so the broken save is still available for support. Returns false if the SaveLoader can't do that (PlayerPrefs). `RestoreBackup` uses it with the label `before-restore`.
-
-## [1.9.0-pre.1] - 2026-09-30
+Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.5.2. Consolidates 1.9.0-pre.1 and pre.2, tested in the game (failed loads, restoring backups, a broken backup, starting over, quitting, a corrupt database).
 
 ### Added
 - **Backups.** Every successful `GameDataPersistence.Load()` backs up the loaded data as a JSON file (background thread, atomic write). A load that migrated also backs up the data before the migration under its old save version. Retention per save version: the newest N (default 3) plus the newest backup of the previous game build; the newest M save versions (default 3) up to the current one; backups of newer save versions are never deleted. A failed load creates and deletes no backups. Configured in `GameDataInstaller`: Create Backups, Backups Per Version, Backup Versions Kept, Backup Folder.
 - `GameDataPersistence.GetBackups()` and `RestoreBackup(GameDataBackup)`: restore a backup after a failed load. The replaced save is kept aside (`<file>.before-restore-<time>`) by `SqliteSaveLoader` and `PersistentDataPathSaveLoader`; the backup is not modified. Saving is blocked until the next `Load()`.
+- `GameDataPersistence.ArchiveStoredData(label)`: keeps the stored data aside (`<file>.<label>-<time>`) instead of losing it - e.g. before starting over after a failed load, so the broken save is still available for support. Returns false if the SaveLoader can't do that (PlayerPrefs).
 - `GameDataPersistence.LastLoadResult` (`GameDataLoadResult`): why loading failed - `Configuration`, `Storage`, `Migration` or `DataSaveLoader` - with the ids of the failed loaders, the stored version and the exceptions.
 
 ### Changed
