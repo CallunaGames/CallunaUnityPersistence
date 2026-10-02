@@ -8,7 +8,7 @@ using UnityEngine;
 
 namespace Calluna.Persistence
 {
-    public class GameDataPersistence : Injectable, Initializable
+    public class GameDataPersistence : Injectable, Initializable, QuitHandler
     {
         public ReadonlyObservable<bool> LoadingFailed => _loadFailed;
         public ReadonlyObservable<bool> DataWasReset => _dataWasReset;
@@ -182,16 +182,22 @@ namespace Calluna.Persistence
         }
 
         /// <summary>
-        /// Blocks the calling thread until any in-progress background write initiated by
-        /// <see cref="SaveAsync"/> completes. Called automatically by the DI cleanup path
-        /// before the final synchronous <see cref="Save"/>, ensuring no write is lost on
-        /// scene teardown.
+        /// Blocks the calling thread until any in-progress background write - a <see cref="SaveAsync"/>
+        /// or a backup - completes. <see cref="Save"/> and <see cref="OverrideSave"/> call it first; on
+        /// quit <see cref="HandleQuit"/> does, so the process doesn't end in the middle of a write.
         /// </summary>
         public void FlushPendingWrite()
         {
             _writer.FlushPendingWrite();
             _backups?.FlushPendingWrite();
         }
+
+        /// <summary>
+        /// Waits for running background writes when the application quits. Doesn't save by itself -
+        /// whether to save is the game's decision (e.g. not after a failed load); a game that saves
+        /// on quit does so in its own <see cref="QuitHandler"/>, in any order relative to this one.
+        /// </summary>
+        void QuitHandler.HandleQuit() => FlushPendingWrite();
 
         /// <summary>
         /// The backups that can be restored - save versions from MinSupportedVersion up to the current

@@ -1,3 +1,10 @@
+## [1.10.0-pre.1] - 2026-10-02
+
+Requires `com.calluna.di` 1.6.0-pre.2.
+
+### Added
+- `GameDataPersistence` is a `QuitHandler`: when the application quits it waits for a running `SaveAsync` or backup write, so the process doesn't end in the middle of one (the files were already safe through atomic writes, but the last state or backup could be lost). It doesn't save by itself - a game that saves on quit does so in its own `QuitHandler`.
+
 ## [1.9.0] - 2026-10-01
 
 Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.5.2. Consolidates 1.9.0-pre.1 and pre.2, tested in the game (failed loads, restoring backups, a broken backup, starting over, quitting, a corrupt database).
