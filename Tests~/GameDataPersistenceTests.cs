@@ -1069,6 +1069,48 @@ namespace Calluna.Persistence.Tests
         }
 
         [Test]
+        [Description("HandleQuit() while a SaveAsync() write is in flight => waits until it's written (1.10.0).")]
+        public void HandleQuit_WhileAsyncWriteInFlight_WaitsForTheWrite()
+        {
+            BlockingStore store = new BlockingStore();
+            StubDataSaveLoader loader = new StubDataSaveLoader("data") { SerializedValue = JToken.FromObject(1) };
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { loader });
+            persistence.Load();
+
+            store.Arm();
+            System.Threading.Tasks.Task write = persistence.SaveAsync();
+            Assert.That(store.WaitUntilBlocked(), Is.True, "The background write never started.");
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                Thread.Sleep(100);
+                store.Release();
+            });
+            ((QuitHandler)persistence).HandleQuit();
+
+            Assert.That(write.IsCompleted, Is.True);
+            Assert.That(store.Load<int>("data"), Is.EqualTo(1));
+        }
+
+        [Test]
+        [Description("HandleQuit() => doesn't save by itself; saving on quit is the game's decision (1.10.0).")]
+        public void HandleQuit_DoesNotSave()
+        {
+            BlockingStore store = new BlockingStore();
+            StubDataSaveLoader loader = new StubDataSaveLoader("data") { SerializedValue = JToken.FromObject(1) };
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { loader });
+            persistence.Load();
+            persistence.FlushPendingWrite();
+            bool hadData = store.Has("data");
+            loader.SerializedValue = JToken.FromObject(2);
+
+            ((QuitHandler)persistence).HandleQuit();
+
+            Assert.That(store.Has("data"), Is.EqualTo(hadData));
+            if (hadData)
+                Assert.That(store.Load<int>("data"), Is.Not.EqualTo(2));
+        }
+
+        [Test]
         [Description("OverrideSave() while a SaveAsync() write is in flight => waits for it, so the override wins.")]
         public void OverrideSave_WhileAsyncWriteInFlight_OverrideWins()
         {
