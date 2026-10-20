@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Calluna.DI;
 using Newtonsoft.Json.Linq;
@@ -12,6 +13,18 @@ namespace Calluna.Persistence
     {
         public ReadonlyObservable<bool> LoadingFailed => _loadFailed;
         public ReadonlyObservable<bool> DataWasReset => _dataWasReset;
+
+        /// <summary>
+        /// Raised on the main thread when a <see cref="Save"/> or <see cref="SaveAsync"/> failed - also for
+        /// a background write nobody awaits. Not raised for skipped saves.
+        /// </summary>
+        public event Action<SaveResult> OnSaveFailed;
+
+        /// <summary>Failed saves since the last successful one (main thread; skipped saves don't count).</summary>
+        public int ConsecutiveSaveFailures { get; private set; }
+
+        /// <summary>The result of the last save that was carried out (saved or failed).</summary>
+        public SaveResult? LastSaveResult { get; private set; }
 
         /// <summary>
         /// Reserved key used to store the save data version in the underlying SaveLoader.
@@ -48,6 +61,10 @@ namespace Calluna.Persistence
         // data. Cleared by the next Load().
         private bool _backupRestored;
 
+        // Results of background writes are handed to the main thread, so OnSaveFailed runs there.
+        private SynchronizationContext _mainThreadContext;
+        private int _mainThreadId;
+
         void Initializable.Initialize()
         {
             _loadFailed.Value = false;
@@ -60,6 +77,9 @@ namespace Calluna.Persistence
             _saveLoader = resolver.Resolve<SaveLoader>();
             _serializer = resolver.Resolve<JsonSerializer>();
             _writer = resolver.Resolve<GameDataWriter>();
+            _writer.OnWriteCompleted = ReportFromAnyThread;
+            _mainThreadContext = SynchronizationContext.Current;
+            _mainThreadId = Thread.CurrentThread.ManagedThreadId;
             _backups = _arguments.Backups != null ? new GameDataBackupStore(_arguments.Backups) : null;
 
             // Structure migration steps are only used when reading the legacy single-blob format
@@ -109,16 +129,21 @@ namespace Calluna.Persistence
         /// write, holding an older snapshot, could finish after this one and overwrite newer data.
         /// </para>
         /// </summary>
-        public void Save()
+        /// <summary>
+        /// Saves the data of all dirty DataSaveLoaders synchronously. Never throws: a failure is logged,
+        /// returned and raised as <see cref="OnSaveFailed"/>.
+        /// </summary>
+        public SaveResult Save()
         {
             if (_loadFailed.Value)
             {
                 Debug.LogError("Save was aborted since loading of the GameData failed initially");
-                return;
+                return SaveResult.Skipped("Loading the game data failed");
             }
             if (IsBlockedByRestore("Save"))
-                return;
+                return SaveResult.Skipped("A backup was restored");
 
+            SaveResult result;
             try
             {
                 _writer.FlushPendingWrite();
@@ -128,12 +153,16 @@ namespace Calluna.Persistence
                 foreach (IDataSaveLoader saveLoader in _saveLoaders.Values)
                     saveLoader.MarkClean();
                 _saveAllLoaders = false;
+                result = SaveResult.Saved();
             }
             catch (Exception e)
             {
                 Debug.LogError($"Failed to save game data '{_arguments.GameDataId}'");
                 Debug.LogException(e);
+                result = SaveResult.Failed($"Saving game data '{_arguments.GameDataId}' failed", e);
             }
+            ReportFromAnyThread(result);
+            return result;
         }
 
         /// <summary>
@@ -153,18 +182,20 @@ namespace Calluna.Persistence
         /// </para>
         /// </summary>
         /// <returns>
-        /// A <see cref="Task"/> that completes when the write finishes. Fire-and-forget is safe;
-        /// await it only if you need to react to completion or errors.
+        /// A task with the <see cref="SaveResult"/> that completes when the write finishes; it never
+        /// faults. Fire-and-forget is safe - a failure is also raised as <see cref="OnSaveFailed"/>.
+        /// When a write is already running, the snapshot is written right after it (a newer one replaces
+        /// it) and the task reports that write.
         /// </returns>
-        public Task SaveAsync()
+        public Task<SaveResult> SaveAsync()
         {
             if (_loadFailed.Value)
             {
                 Debug.LogError("SaveAsync was aborted since loading of the GameData failed initially");
-                return Task.CompletedTask;
+                return Task.FromResult(SaveResult.Skipped("Loading the game data failed"));
             }
             if (IsBlockedByRestore("SaveAsync"))
-                return Task.CompletedTask;
+                return Task.FromResult(SaveResult.Skipped("A backup was restored"));
 
             List<(string Id, JToken Data)> snapshot;
             try
@@ -175,10 +206,40 @@ namespace Calluna.Persistence
             {
                 Debug.LogError($"Failed to serialize game data '{_arguments.GameDataId}'");
                 Debug.LogException(e);
-                return Task.CompletedTask;
+                SaveResult failed = SaveResult.Failed($"Serializing game data '{_arguments.GameDataId}' failed", e);
+                ReportFromAnyThread(failed);
+                return Task.FromResult(failed);
             }
 
             return _writer.SaveAsync(snapshot);
+        }
+
+        // Writes report from the thread they ran on; the state and the event are updated on the main thread.
+        private void ReportFromAnyThread(SaveResult result)
+        {
+            if (_mainThreadContext == null || Thread.CurrentThread.ManagedThreadId == _mainThreadId)
+                Report(result);
+            else
+                _mainThreadContext.Post(_ => Report(result), null);
+        }
+
+        private void Report(SaveResult result)
+        {
+            LastSaveResult = result;
+            if (result.Succeeded)
+            {
+                ConsecutiveSaveFailures = 0;
+                return;
+            }
+            ConsecutiveSaveFailures++;
+            try
+            {
+                OnSaveFailed?.Invoke(result);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
         }
 
         /// <summary>

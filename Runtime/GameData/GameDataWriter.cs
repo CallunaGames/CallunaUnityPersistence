@@ -23,9 +23,15 @@ namespace Calluna.Persistence
         private int _currentVersion;
 
         private readonly object _writeLock = new object();
-        private Task _pendingWrite;
+        private Task<SaveResult> _pendingWrite;
         private List<(string Id, JToken Data)> _pendingSnapshot;
         private bool _mainThreadFallbackWarningLogged;
+
+        /// <summary>
+        /// Called with the result of every write <see cref="SaveAsync"/> carries out - on the thread that
+        /// wrote, i.e. possibly a background thread.
+        /// </summary>
+        internal Action<SaveResult> OnWriteCompleted;
 
         private bool RequiresMainThread =>
             _saveLoader is IMainThreadSaveLoader ||
@@ -81,7 +87,7 @@ namespace Calluna.Persistence
         /// support background threads (WebGL), falls back to a synchronous write with a one-time
         /// warning.
         /// </summary>
-        internal Task SaveAsync(List<(string Id, JToken Data)> snapshot)
+        internal Task<SaveResult> SaveAsync(List<(string Id, JToken Data)> snapshot)
         {
             if (RequiresMainThread)
             {
@@ -93,8 +99,7 @@ namespace Calluna.Persistence
                     _mainThreadFallbackWarningLogged = true;
                 }
 
-                CommitToStorage(snapshot);
-                return Task.CompletedTask;
+                return Task.FromResult(Write(snapshot));
             }
 
             // "Latest wins" concurrency policy: if a write is in progress, store this snapshot
@@ -142,17 +147,11 @@ namespace Calluna.Persistence
             _saveLoader.Save(GameDataPersistence.VersionKey, version);
         }
 
-        private void WriteSnapshotBackground(List<(string Id, JToken Data)> snapshot)
+        // Returns the result of the last write - a caller whose snapshot was queued behind a running write
+        // gets the result of its own snapshot (or of a newer one that replaced it).
+        private SaveResult WriteSnapshotBackground(List<(string Id, JToken Data)> snapshot)
         {
-            try
-            {
-                CommitToStorage(snapshot);
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"SaveAsync failed for game data '{_gameDataId}'");
-                Debug.LogException(e);
-            }
+            SaveResult result = Write(snapshot);
 
             // If a newer snapshot arrived while we were writing, commit it now.
             List<(string Id, JToken Data)> next;
@@ -162,8 +161,25 @@ namespace Calluna.Persistence
                 _pendingSnapshot = null;
             }
 
-            if (next != null)
-                WriteSnapshotBackground(next);
+            return next != null ? WriteSnapshotBackground(next) : result;
+        }
+
+        private SaveResult Write(List<(string Id, JToken Data)> snapshot)
+        {
+            SaveResult result;
+            try
+            {
+                CommitToStorage(snapshot);
+                result = SaveResult.Saved();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"SaveAsync failed for game data '{_gameDataId}'");
+                Debug.LogException(e);
+                result = SaveResult.Failed($"Writing game data '{_gameDataId}' failed", e);
+            }
+            OnWriteCompleted?.Invoke(result);
+            return result;
         }
 
         internal class Arguments
