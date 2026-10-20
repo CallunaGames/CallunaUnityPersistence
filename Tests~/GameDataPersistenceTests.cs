@@ -1,5 +1,7 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading;
 using Calluna.DI;
@@ -1089,6 +1091,130 @@ namespace Calluna.Persistence.Tests
 
             Assert.That(write.IsCompleted, Is.True);
             Assert.That(store.Load<int>("data"), Is.EqualTo(1));
+        }
+
+        // -----------------------------------------------------------------------
+        // 1.11.0 - save results
+        // -----------------------------------------------------------------------
+
+        private class FailingStore : SaveLoader
+        {
+            public event Action OnClear;
+            public bool FailWrites;
+            private readonly FakeSaveLoader _store = new FakeSaveLoader();
+
+            public bool Has(string id) => _store.Has(id);
+            public T Load<T>(string id, T defaultValue = default) => _store.Load(id, defaultValue);
+
+            public void Save<T>(string id, T value)
+            {
+                if (FailWrites)
+                    throw new IOException("Simulated write failure");
+                _store.Save(id, value);
+            }
+
+            public void Delete(string id) => _store.Delete(id);
+            public void Clear() { _store.Clear(); OnClear?.Invoke(); }
+        }
+
+        private static (GameDataPersistence, FailingStore) BuildWithFailingStore()
+        {
+            FailingStore store = new FailingStore();
+            StubDataSaveLoader loader = new StubDataSaveLoader("data") { SerializedValue = JToken.FromObject(1) };
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { loader });
+            persistence.Load();
+            return (persistence, store);
+        }
+
+        [Test]
+        [Description("Save() succeeds => Saved, no failures counted (1.11.0).")]
+        public void Save_Succeeds_ReturnsSaved()
+        {
+            (GameDataPersistence persistence, _) = BuildWithFailingStore();
+
+            SaveResult result = persistence.Save();
+
+            Assert.That(result.Outcome, Is.EqualTo(SaveOutcome.Saved));
+            Assert.That(persistence.ConsecutiveSaveFailures, Is.EqualTo(0));
+            Assert.That(persistence.LastSaveResult?.Succeeded, Is.True);
+        }
+
+        [Test]
+        [Description("Save() when the SaveLoader throws => Failed with the exception, OnSaveFailed raised, failure counted (1.11.0).")]
+        public void Save_WriteThrows_ReturnsFailedAndRaisesOnSaveFailed()
+        {
+            (GameDataPersistence persistence, FailingStore store) = BuildWithFailingStore();
+            SaveResult? raised = null;
+            persistence.OnSaveFailed += result => raised = result;
+            store.FailWrites = true;
+
+            LogAssert.Expect(LogType.Error, new Regex("Failed to save game data"));
+            LogAssert.Expect(LogType.Exception, new Regex("Simulated write failure"));
+            SaveResult saveResult = persistence.Save();
+
+            Assert.That(saveResult.Outcome, Is.EqualTo(SaveOutcome.Failed));
+            Assert.That(saveResult.Exception, Is.TypeOf<IOException>());
+            Assert.That(raised?.Outcome, Is.EqualTo(SaveOutcome.Failed));
+            Assert.That(persistence.ConsecutiveSaveFailures, Is.EqualTo(1));
+        }
+
+        [Test]
+        [Description("A successful Save() after failed ones => failure count back to 0 (1.11.0).")]
+        public void Save_AfterFailures_ResetsTheFailureCount()
+        {
+            (GameDataPersistence persistence, FailingStore store) = BuildWithFailingStore();
+            LogAssert.ignoreFailingMessages = true;
+            store.FailWrites = true;
+            persistence.Save();
+            persistence.Save();
+            Assert.That(persistence.ConsecutiveSaveFailures, Is.EqualTo(2));
+
+            store.FailWrites = false;
+            SaveResult result = persistence.Save();
+
+            Assert.That(result.Succeeded, Is.True);
+            Assert.That(persistence.ConsecutiveSaveFailures, Is.EqualTo(0));
+        }
+
+        [UnityTest]
+        [Description("SaveAsync() when the background write throws => the task reports Failed (it doesn't fault), " +
+                     "OnSaveFailed is raised on the main thread (1.11.0).")]
+        public IEnumerator SaveAsync_WriteThrows_ReportsFailedOnTheMainThread()
+        {
+            (GameDataPersistence persistence, FailingStore store) = BuildWithFailingStore();
+            LogAssert.ignoreFailingMessages = true;
+            int mainThread = Thread.CurrentThread.ManagedThreadId;
+            int? eventThread = null;
+            persistence.OnSaveFailed += _ => eventThread = Thread.CurrentThread.ManagedThreadId;
+            store.FailWrites = true;
+
+            System.Threading.Tasks.Task<SaveResult> task = persistence.SaveAsync();
+            float timeout = Time.realtimeSinceStartup + 5f;
+            while (eventThread == null && Time.realtimeSinceStartup < timeout)
+                yield return null;
+
+            Assert.That(task.IsFaulted, Is.False);
+            Assert.That(task.Result.Outcome, Is.EqualTo(SaveOutcome.Failed));
+            Assert.That(eventThread, Is.EqualTo(mainThread));
+            Assert.That(persistence.ConsecutiveSaveFailures, Is.EqualTo(1));
+        }
+
+        [Test]
+        [Description("SaveAsync() after a failed load => Skipped, not counted as failure (1.11.0).")]
+        public void SaveAsync_LoadingFailed_IsSkipped()
+        {
+            FakeSaveLoader store = new FakeSaveLoader { ThrowOnLoad = true };
+            store.Save(GameDataPersistence.VersionKey, 1);
+            StubDataSaveLoader loader = new StubDataSaveLoader("data") { SerializedValue = JToken.FromObject(1) };
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { loader });
+            LogAssert.ignoreFailingMessages = true;
+            persistence.Load();
+            Assume.That(persistence.LoadingFailed.Value, Is.True);
+
+            SaveResult result = persistence.SaveAsync().GetAwaiter().GetResult();
+
+            Assert.That(result.Outcome, Is.EqualTo(SaveOutcome.Skipped));
+            Assert.That(persistence.ConsecutiveSaveFailures, Is.EqualTo(0));
         }
 
         [Test]

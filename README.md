@@ -222,10 +222,13 @@ class GameDataPersistence : Injectable, Initializable
 ReadonlyObservable<bool> LoadingFailed { get; }
 ReadonlyObservable<bool> DataWasReset  { get; }
 GameDataLoadResult LastLoadResult { get; }
+SaveResult? LastSaveResult { get; }
+int ConsecutiveSaveFailures { get; }
+event Action<SaveResult> OnSaveFailed;
 
 void Load();
-void Save();
-Task SaveAsync();
+SaveResult Save();
+Task<SaveResult> SaveAsync();
 void FlushPendingWrite();
 void OverrideSave(Dictionary<string, JToken> data, int version);
 
@@ -236,6 +239,7 @@ void RestoreBackup(GameDataBackup backup);
 - `Load()` loads each `DataSaveLoader`'s key individually, applies any pending `GameDataMigrator` steps in ascending version order, and dispatches data to each loader. The migrated data is written back in one batch; a slice a migrator removed from the dictionary is deleted from storage. If the stored version is below `MinSupportedVersion` all data is discarded, defaults are used, and `DataWasReset` is set to `true` - the next `Save()` then writes every loader, dirty or not, so no stale data survives under the new version. Loading fails - `LoadingFailed` becomes `true` and `LastLoadResult` tells why (`Configuration`, `Storage`, `Migration` or `DataSaveLoader` with the ids of the failed loaders) - if the data can't be read, a migrator throws or **any** `DataSaveLoader` throws. All loaders are still tried, so every failed one is reported. A failed load writes nothing: migrated data is only stored once every loader has loaded it, so the save keeps its old version and data. On success a backup is created (see *Backups* below).
 - `Save()` is a no-op when `LoadingFailed` is `true`. It first waits for a background write started by `SaveAsync()`, so an older queued snapshot can't overwrite the newer data. Only loaders where `IsDirty == true` are serialised. All dirty loaders are serialised before anything is written — if any serialisation fails the entire write is aborted, leaving storage unchanged. After a successful write, `MarkClean()` is called on every loader.
 - `SaveAsync()` serialises dirty loaders on the calling (main) thread, then dispatches the write to a background thread so the caller is not blocked by I/O. Fire-and-forget is safe; await the returned `Task` only if you need to react to completion. **Dirty flags are not cleared after an async save** — the final synchronous `Save()` on DI cleanup handles that. Falls back to a synchronous write (with a one-time warning) when the underlying `SaveLoader` requires main-thread access (e.g. `PlayerPrefsSaveLoader`) or the platform does not support background threads (WebGL). When using `SqliteSaveLoader` with `SaveAsync()`, enable the **Full Mutex** toggle in `SqliteSaveLoaderInstaller`.
+- **Save results.** `Save()` and `SaveAsync()` never throw (the task never faults); they return a `SaveResult`: `Saved`, `Skipped` (nothing written on purpose - loading failed or a restored backup must not be overwritten) or `Failed` with the `Exception`. Every failed save - also a background write nobody awaits - raises `OnSaveFailed` on the main thread; `ConsecutiveSaveFailures` counts them until the next successful save. Use it to tell the player (e.g. a toast after the first failure of a streak) or to report it - mind that IO exception messages contain file paths.
 - `FlushPendingWrite()` blocks the calling thread until any in-progress background write started by `SaveAsync()` completes. Called automatically by the DI cleanup path before the final `Save()`, so no write is lost on scene teardown. You only need to call this manually if you are managing the DI lifecycle yourself.
 - `OverrideSave()` writes each entry in the supplied dictionary as its own key and updates `__version__`, in one batch after waiting for a background write; use with care. Also a no-op when `LoadingFailed` is `true`.
 
@@ -283,11 +287,12 @@ public class AutoSaveTrigger : MonoBehaviour, Injectable
         _ = _persistence.SaveAsync();
     }
 
-    // Await the Task if you need to react to completion:
+    // Await the result if you need to react to it:
     public async void TriggerAutoSaveAndShowIndicator()
     {
-        await _persistence.SaveAsync();
-        ShowSaveCompleteIndicator();
+        SaveResult result = await _persistence.SaveAsync();
+        if (result.Succeeded)
+            ShowSaveCompleteIndicator();
     }
 }
 ```

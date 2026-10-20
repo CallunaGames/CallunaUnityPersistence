@@ -1,3 +1,14 @@
+## [1.11.0] - 2026-10-20
+
+Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.6.0. Tested in the game (failed autosaves with a write-protected save file).
+
+### Added
+- **Save results.** `Save()` returns a `SaveResult` and `SaveAsync()` a `Task<SaveResult>`: `Saved`, `Skipped` (loading failed or a restored backup must not be overwritten - nothing written on purpose) or `Failed` (with the exception). Before, a failed write was only logged - `SaveAsync()`'s task completed normally, so callers couldn't tell a failed save from a successful one. The task never faults; existing callers that treat it as a `Task` keep working.
+- `GameDataPersistence.OnSaveFailed`: raised on the main thread for every failed save, also for background writes nobody awaits. `ConsecutiveSaveFailures` (reset by the next successful save) and `LastSaveResult` let the game decide when to tell the player.
+
+### Changed
+- `SaveAsync()` with a SaveLoader that needs the main thread (PlayerPrefs, WebGL) no longer throws when the write fails; it returns `Failed` like the background write.
+
 ## [1.10.0] - 2026-10-02
 
 Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.6.0.
