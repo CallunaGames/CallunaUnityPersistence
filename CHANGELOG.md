@@ -1,4 +1,6 @@
-## [1.11.0-pre.1] - 2026-10-20
+## [1.11.0] - 2026-10-20
+
+Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.6.0. Tested in the game (failed autosaves with a write-protected save file).
 
 ### Added
 - **Save results.** `Save()` returns a `SaveResult` and `SaveAsync()` a `Task<SaveResult>`: `Saved`, `Skipped` (loading failed or a restored backup must not be overwritten - nothing written on purpose) or `Failed` (with the exception). Before, a failed write was only logged - `SaveAsync()`'s task completed normally, so callers couldn't tell a failed save from a successful one. The task never faults; existing callers that treat it as a `Task` keep working.
