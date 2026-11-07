@@ -1,3 +1,22 @@
+## [1.12.0-pre.1] - 2026-11-07
+
+Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.6.0. Prepares a second `GameDataPersistence` for settings in a JSON file (cloud-synced) next to the save game.
+
+### Added
+- **Reset Unreadable Data** (`GameDataInstaller`, off by default): data that can't be read, migrated or loaded is kept aside as `<file>.unreadable-<time>` and every `DataSaveLoader` gets its default, instead of failing the load and blocking every save. The load succeeds with `DataWasReset`, and the new `GameDataLoadResult.RecoveredFrom` names the failure. Read errors that may pass (`IOException`, `UnauthorizedAccessException`), data of a newer version and configuration errors still fail. For data that is cheap to lose but must never block the game, e.g. settings.
+- `PersistentDataPathSaveLoaderInstaller` **Indented**: writes human-readable JSON.
+- README: *Several GameDataPersistence instances* (own DI scope, own file, Game Data Id and backup folder).
+
+### Changed
+- **Stored data of a newer version fails the load** (`GameDataLoadFailure.NewerVersion`, `LoadingFailed`), nothing is written. Before, an older game version loaded it without migration, dropped what it didn't know and saved the rest under its older version - the newer game then migrated it again. Relevant for downgrades, e.g. switching from a beta branch back, or a cloud-synced file shared by two game versions.
+- **A successful `Load()` clears `LoadingFailed`** (and sets `DataWasReset` to the outcome of that load). Before, only `Initialize()` cleared it, so a retry after `ArchiveStoredData()` or `RestoreBackup()` within the same context still blocked every save.
+- **`PersistentDataPathSaveLoader` writes atomically and keeps no file open.** The content goes to `<file>.tmp`, flushed to disk, which then replaces the file - a crash while writing leaves the previous file. Before, the file was truncated and rewritten in place (a crash left it empty or cut off) and stayed open with read-only sharing until `Clean()`, so other programs couldn't replace it. A write costs about 2-4 ms instead of 0.1 ms for a small file; the open streams (1.1, to save allocations) date from before batched saves.
+- **`PersistentDataPathSaveLoader`: an empty file or `null` is unreadable** (`InvalidDataException`). Before, it was silently read as no data and the next save overwrote it with defaults. A missing file is still no data, and reading no longer creates an empty file.
+
+### Fixed
+- `PersistentDataPathSaveLoader` is thread-safe: a `SaveAsync()` write on the background thread no longer races with the main thread (including `Clean()` closing the streams in the middle of a write).
+- Docs: the package CLAUDE.md (version, backends), README on which installers bind `JsonSerializer`, the doubled summary of `Save()`; the tests of `PersistentDataPathSaveLoader` no longer leave files in `persistentDataPath`.
+
 ## [1.11.0] - 2026-10-20
 
 Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.6.0. Tested in the game (failed autosaves with a write-protected save file).

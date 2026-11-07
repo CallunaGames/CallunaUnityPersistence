@@ -1015,7 +1015,8 @@ namespace Calluna.Persistence.Tests
         }
 
         private static GameDataPersistence BuildPersistence(SaveLoader saveLoader, int minVersion, int currentVersion,
-            IReadOnlyList<IDataSaveLoader> dataLoaders, IReadOnlyList<IGameDataMigrator> migrators = null)
+            IReadOnlyList<IDataSaveLoader> dataLoaders, IReadOnlyList<IGameDataMigrator> migrators = null,
+            bool resetUnreadableData = false)
         {
             JsonSerializer serializer = BuildSerializer();
             GameDataWriter writer = BuildWriter(saveLoader, "gdp_180", currentVersion);
@@ -1031,7 +1032,8 @@ namespace Calluna.Persistence.Tests
                     MinSupportedVersion = minVersion,
                     CurrentVersion = currentVersion,
                     SaveLoaders = dataLoaders,
-                    Migrators = migrators
+                    Migrators = migrators,
+                    ResetUnreadableData = resetUnreadableData,
                 });
 
             GameDataPersistence persistence = new GameDataPersistence();
@@ -1366,6 +1368,240 @@ namespace Calluna.Persistence.Tests
             persistence.Save();
 
             Assert.That(loader.GetSerializedDataCallCount, Is.EqualTo(1));
+        }
+
+        // -----------------------------------------------------------------------
+        // 1.12.0 — newer stored version, load after a failed load, Reset Unreadable Data
+        // -----------------------------------------------------------------------
+
+        /// <summary>An in-memory store that can keep its data aside, like the file and SQLite backends.</summary>
+        private class ArchivableStore : SaveLoader, IArchivableSaveLoader
+        {
+            public event Action OnClear;
+            /// <summary>Thrown by Load() until the data is archived.</summary>
+            public Exception LoadException;
+            public string ArchivedSuffix;
+            public readonly Dictionary<string, string> Data = new Dictionary<string, string>();
+
+            public bool Has(string id) => Data.ContainsKey(id);
+
+            public T Load<T>(string id, T defaultValue = default)
+            {
+                if (LoadException != null)
+                    throw LoadException;
+                return Data.TryGetValue(id, out string json)
+                    ? Newtonsoft.Json.JsonConvert.DeserializeObject<T>(json)
+                    : defaultValue;
+            }
+
+            public void Save<T>(string id, T value) => Data[id] = Newtonsoft.Json.JsonConvert.SerializeObject(value);
+            public void Delete(string id) => Data.Remove(id);
+            public void Clear() { Data.Clear(); OnClear?.Invoke(); }
+
+            void IArchivableSaveLoader.Archive(string suffix)
+            {
+                ArchivedSuffix = suffix;
+                Data.Clear();
+                LoadException = null;
+            }
+        }
+
+        private static ArchivableStore ArchivableWithData(int version, params string[] ids)
+        {
+            ArchivableStore store = new ArchivableStore();
+            store.Save(GameDataPersistence.VersionKey, version);
+            foreach (string id in ids)
+                store.Save(id, JToken.FromObject(new { value = 7 }));
+            return store;
+        }
+
+        [Test]
+        [Description("Stored data of a newer version than the current one => NewerVersion failure, no loader called, " +
+                     "nothing written. Before 1.12.0 it loaded without migration, and the next save stored it " +
+                     "under the older version.")]
+        public void Load_NewerStoredVersion_FailsAndWritesNothing()
+        {
+            FakeSaveLoader store = StoreWithData(3, "data");
+            StubDataSaveLoader loader = new StubDataSaveLoader("data");
+            GameDataPersistence persistence = BuildPersistence(store, 0, 2, new IDataSaveLoader[] { loader });
+
+            ExpectLoadFailureLogs(1);
+            persistence.Load();
+
+            Assert.That(persistence.LoadingFailed.Value, Is.True);
+            Assert.That(persistence.LastLoadResult.Failure, Is.EqualTo(GameDataLoadFailure.NewerVersion));
+            Assert.That(persistence.LastLoadResult.StoredVersion, Is.EqualTo(3));
+            Assert.That(loader.LoadCalled || loader.LoadDefaultCalled, Is.False);
+            LogAssert.Expect(LogType.Error, new Regex("Save was aborted"));
+            Assert.That(persistence.Save().Outcome, Is.EqualTo(SaveOutcome.Skipped));
+            Assert.That(store.Load<int>(GameDataPersistence.VersionKey), Is.EqualTo(3));
+        }
+
+        [Test]
+        [Description("Newer stored version with Reset Unreadable Data => still fails: the data isn't broken, so it " +
+                     "is neither kept aside nor reset.")]
+        public void Load_NewerStoredVersion_NotResetByResetUnreadableData()
+        {
+            ArchivableStore store = ArchivableWithData(3, "data");
+            GameDataPersistence persistence = BuildPersistence(store, 0, 2,
+                new IDataSaveLoader[] { new StubDataSaveLoader("data") }, resetUnreadableData: true);
+
+            ExpectLoadFailureLogs(1);
+            persistence.Load();
+
+            Assert.That(persistence.LastLoadResult.Failure, Is.EqualTo(GameDataLoadFailure.NewerVersion));
+            Assert.That(store.ArchivedSuffix, Is.Null);
+            Assert.That(store.Has("data"), Is.True);
+        }
+
+        [Test]
+        [Description("A successful Load() after a failed one => LoadingFailed is false again and saving works. " +
+                     "Before 1.12.0 only Initialize() cleared it.")]
+        public void Load_SucceedsAfterFailedLoad_ClearsLoadingFailed()
+        {
+            FakeSaveLoader store = StoreWithData(1, "data");
+            store.ThrowOnLoad = true;
+            StubDataSaveLoader loader = new StubDataSaveLoader("data");
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { loader });
+            ExpectLoadFailureLogs(1);
+            persistence.Load();
+            Assume.That(persistence.LoadingFailed.Value, Is.True);
+
+            store.ThrowOnLoad = false;
+            persistence.Load();
+
+            Assert.That(persistence.LoadingFailed.Value, Is.False);
+            Assert.That(persistence.LastLoadResult.Succeeded, Is.True);
+            Assert.That(persistence.Save().Outcome, Is.EqualTo(SaveOutcome.Saved));
+        }
+
+        [Test]
+        [Description("Unreadable data with Reset Unreadable Data => kept aside as '.unreadable-<time>', every loader " +
+                     "gets its default, the load succeeds with RecoveredFrom = Storage and DataWasReset, and the " +
+                     "next save writes every loader (also clean ones).")]
+        public void Load_UnreadableData_ResetOption_KeepsItAsideAndLoadsDefaults()
+        {
+            ArchivableStore store = ArchivableWithData(1, "data");
+            store.LoadException = new InvalidDataException("Simulated broken file");
+            DirtyTrackingStub loader = new DirtyTrackingStub("data");
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { loader },
+                resetUnreadableData: true);
+
+            persistence.Load();
+
+            Assert.That(persistence.LoadingFailed.Value, Is.False);
+            Assert.That(persistence.DataWasReset.Value, Is.True);
+            Assert.That(persistence.LastLoadResult.Succeeded, Is.True);
+            Assert.That(persistence.LastLoadResult.RecoveredFrom, Is.EqualTo(GameDataLoadFailure.Storage));
+            Assert.That(persistence.LastLoadResult.Exceptions[0], Is.InstanceOf<InvalidDataException>());
+            Assert.That(store.ArchivedSuffix, Does.StartWith(".unreadable-"));
+
+            loader._isDirty = false;
+            Assert.That(persistence.Save().Outcome, Is.EqualTo(SaveOutcome.Saved));
+            Assert.That(loader.GetSerializedDataCallCount, Is.EqualTo(1));
+            Assert.That(store.Load<int>(GameDataPersistence.VersionKey), Is.EqualTo(1));
+        }
+
+        [Test]
+        [Description("A DataSaveLoader throws with Reset Unreadable Data => all data is reset, every loader gets its " +
+                     "default; the result names the failed data.")]
+        public void Load_LoaderThrows_ResetOption_ResetsToDefaults()
+        {
+            ArchivableStore store = ArchivableWithData(1, "bad", "good");
+            ThrowingLoadStub bad = new ThrowingLoadStub("bad");
+            StubDataSaveLoader good = new StubDataSaveLoader("good");
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { bad, good },
+                resetUnreadableData: true);
+
+            persistence.Load();
+
+            Assert.That(persistence.LoadingFailed.Value, Is.False);
+            Assert.That(persistence.LastLoadResult.RecoveredFrom, Is.EqualTo(GameDataLoadFailure.DataSaveLoader));
+            Assert.That(persistence.LastLoadResult.FailedDataIds, Is.EqualTo(new[] { "bad" }));
+            Assert.That(bad.LoadDefaultCalled, Is.True);
+            Assert.That(good.LoadDefaultCalled, Is.True);
+        }
+
+        [Test]
+        [Description("A read error that may pass (IOException, e.g. a locked file) with Reset Unreadable Data => " +
+                     "the load fails and the data stays: it isn't broken.")]
+        public void Load_IOException_ResetOption_StaysFailedAndKeepsData()
+        {
+            ArchivableStore store = ArchivableWithData(1, "data");
+            store.LoadException = new IOException("Simulated locked file");
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1,
+                new IDataSaveLoader[] { new StubDataSaveLoader("data") }, resetUnreadableData: true);
+
+            LogAssert.Expect(LogType.Error, new Regex("Failed to load game data"));
+            LogAssert.Expect(LogType.Exception, new Regex("IOException"));
+            persistence.Load();
+
+            Assert.That(persistence.LoadingFailed.Value, Is.True);
+            Assert.That(store.ArchivedSuffix, Is.Null);
+            Assert.That(store.Data.ContainsKey("data"), Is.True);
+        }
+
+        [Test]
+        [Description("Reset Unreadable Data with a store that can't keep data aside (PlayerPrefs) => the load fails, " +
+                     "nothing is reset.")]
+        public void Load_Unreadable_ResetOption_NotArchivable_StaysFailed()
+        {
+            FakeSaveLoader store = StoreWithData(1, "data");
+            store.ThrowOnLoad = true;
+            StubDataSaveLoader loader = new StubDataSaveLoader("data");
+            GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { loader },
+                resetUnreadableData: true);
+
+            ExpectLoadFailureLogs(1);
+            persistence.Load();
+
+            Assert.That(persistence.LoadingFailed.Value, Is.True);
+            Assert.That(loader.LoadDefaultCalled, Is.False);
+        }
+
+        [Test]
+        [Description("End to end with the file backend: an empty settings file (e.g. cut off by a crash before " +
+                     "1.12.0) is kept aside, the loaders get their defaults and the next save writes a valid file.")]
+        public void Load_EmptyFile_ResetOption_KeepsItAsideAndWritesNewFile()
+        {
+            string fileName = $"CallunaTest_{Guid.NewGuid():N}.json";
+            string path = Path.Combine(Application.persistentDataPath, fileName);
+            File.WriteAllText(path, "");
+            PersistentDataPathSaveLoader fileStore = BuildFileStore(fileName);
+            StubDataSaveLoader loader = new StubDataSaveLoader("data");
+            GameDataPersistence persistence = BuildPersistence(fileStore, 0, 1, new IDataSaveLoader[] { loader },
+                resetUnreadableData: true);
+            string[] archived = Array.Empty<string>();
+            try
+            {
+                persistence.Load();
+                archived = Directory.GetFiles(Application.persistentDataPath, fileName + ".unreadable-*");
+
+                Assert.That(persistence.LastLoadResult.RecoveredFrom, Is.EqualTo(GameDataLoadFailure.Storage));
+                Assert.That(loader.LoadDefaultCalled, Is.True);
+                Assert.That(archived.Length, Is.EqualTo(1));
+                Assert.That(persistence.Save().Outcome, Is.EqualTo(SaveOutcome.Saved));
+                Assert.That(JObject.Parse(File.ReadAllText(path))["data"], Is.Not.Null);
+            }
+            finally
+            {
+                foreach (string file in archived)
+                    File.Delete(file);
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+        }
+
+        private static PersistentDataPathSaveLoader BuildFileStore(string fileName)
+        {
+            Mock<Resolver> r = new Mock<Resolver>();
+            r.Setup(x => x.Resolve<JsonSerializer>()).Returns(BuildSerializer());
+            r.Setup(x => x.Resolve<TextFileReadWriter>()).Returns(new TextFileReadWriter());
+            r.Setup(x => x.Resolve<PersistentDataPathSaveLoader.Arguments>())
+                .Returns(new PersistentDataPathSaveLoader.Arguments { FileName = fileName });
+            PersistentDataPathSaveLoader store = new PersistentDataPathSaveLoader();
+            ((Injectable)store).Inject(r.Object);
+            return store;
         }
     }
 }

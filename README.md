@@ -44,9 +44,13 @@ Use `PlayerPrefsSaveLoaderInstaller` to wire it. Add the MonoBehaviour to your s
 
 ### PersistentDataPathSaveLoader
 
-Stores all data as a `Dictionary<string, JToken>` in a single JSON file under `Application.persistentDataPath`. File streams are kept open for performance and closed when `Clean()` is called. Every change rewrites the file - within a `GameDataPersistence` save only once, at the end. `Has()` doesn't create the file. Operations after `Clean()` still work, but read and write the file in one go without keeping it open.
+Stores all data as a `Dictionary<string, JToken>` in a single JSON file under `Application.persistentDataPath`. The file is read once, on first access. Every change rewrites it - within a `GameDataPersistence` save only once, at the end - atomically: the content goes to `<file>.tmp`, which then replaces the file, so a crash while writing leaves the previous file instead of an empty or cut-off one. No file is kept open, so cloud sync or a player's editor can read and replace it while the game runs (the loader doesn't notice outside changes; its next write overwrites them). `Has()` and `Load()` don't create the file. Thread-safe, for `SaveAsync()`.
 
-Use `PersistentDataPathSaveLoaderInstaller` to wire it. Add the MonoBehaviour to your scene's MonoContext and set the **File Name** field in the Inspector (default: `SaveData.txt`).
+A file that exists but is empty or isn't a JSON object can't be read: `Has()` and `Load()` throw `InvalidDataException` (garbage: Newtonsoft's exception), which `GameDataPersistence` reports as a `Storage` failure - see *Reset Unreadable Data* to recover from it automatically.
+
+An atomic write costs about 2-4 ms for a small file on an SSD (a flush to disk plus the file swap; measured on Windows), against about 0.1 ms for the open stream before 1.12.0 - negligible for saves that run once per batch.
+
+Use `PersistentDataPathSaveLoaderInstaller` to wire it. Add the MonoBehaviour to your scene's MonoContext and set the **File Name** field in the Inspector (default: `SaveData.txt`). **Indented** writes human-readable JSON, e.g. for a settings file players may open.
 
 ### SqliteSaveLoader
 
@@ -236,7 +240,8 @@ IReadOnlyList<GameDataBackup> GetBackups();
 void RestoreBackup(GameDataBackup backup);
 ```
 
-- `Load()` loads each `DataSaveLoader`'s key individually, applies any pending `GameDataMigrator` steps in ascending version order, and dispatches data to each loader. The migrated data is written back in one batch; a slice a migrator removed from the dictionary is deleted from storage. If the stored version is below `MinSupportedVersion` all data is discarded, defaults are used, and `DataWasReset` is set to `true` - the next `Save()` then writes every loader, dirty or not, so no stale data survives under the new version. Loading fails - `LoadingFailed` becomes `true` and `LastLoadResult` tells why (`Configuration`, `Storage`, `Migration` or `DataSaveLoader` with the ids of the failed loaders) - if the data can't be read, a migrator throws or **any** `DataSaveLoader` throws. All loaders are still tried, so every failed one is reported. A failed load writes nothing: migrated data is only stored once every loader has loaded it, so the save keeps its old version and data. On success a backup is created (see *Backups* below).
+- `Load()` loads each `DataSaveLoader`'s key individually, applies any pending `GameDataMigrator` steps in ascending version order, and dispatches data to each loader. The migrated data is written back in one batch; a slice a migrator removed from the dictionary is deleted from storage. If the stored version is below `MinSupportedVersion` all data is discarded, defaults are used, and `DataWasReset` is set to `true` - the next `Save()` then writes every loader, dirty or not, so no stale data survives under the new version. Loading fails - `LoadingFailed` becomes `true` and `LastLoadResult` tells why (`Configuration`, `Storage`, `NewerVersion`, `Migration` or `DataSaveLoader` with the ids of the failed loaders) - if the data can't be read, was saved by a newer game version (stored version above `CurrentVersion`: loading it would drop what this version doesn't know), a migrator throws or **any** `DataSaveLoader` throws. All loaders are still tried, so every failed one is reported. A failed load writes nothing: migrated data is only stored once every loader has loaded it, so the save keeps its old version and data. While the stored data is the one that failed, saving stays blocked; a later successful `Load()` (after `RestoreBackup()` or `ArchiveStoredData()`) clears `LoadingFailed` again. On success a backup is created (see *Backups* below).
+- **Reset Unreadable Data** (`GameDataInstaller`, off by default): data that can't be read, migrated or loaded is kept aside as `<file>.unreadable-<time>` (needs a SaveLoader that can archive: file or SQLite) and every loader gets its default instead. The load succeeds, `DataWasReset` becomes `true`, `LastLoadResult.RecoveredFrom` names the failure (with its exceptions), and the next `Save()` writes every loader. Not reset: read errors that may pass (`IOException`, `UnauthorizedAccessException` - e.g. a locked file), `NewerVersion` data and `Configuration` failures - those still fail. Meant for data that is cheap to lose but must never block the game, e.g. settings; a save game's failed load belongs in front of the player (backups, start over).
 - `Save()` is a no-op when `LoadingFailed` is `true`. It first waits for a background write started by `SaveAsync()`, so an older queued snapshot can't overwrite the newer data. Only loaders where `IsDirty == true` are serialised. All dirty loaders are serialised before anything is written — if any serialisation fails the entire write is aborted, leaving storage unchanged. After a successful write, `MarkClean()` is called on every loader.
 - `SaveAsync()` serialises dirty loaders on the calling (main) thread, then dispatches the write to a background thread so the caller is not blocked by I/O. Fire-and-forget is safe; await the returned `Task` only if you need to react to completion. **Dirty flags are not cleared after an async save** — the final synchronous `Save()` on DI cleanup handles that. Falls back to a synchronous write (with a one-time warning) when the underlying `SaveLoader` requires main-thread access (e.g. `PlayerPrefsSaveLoader`) or the platform does not support background threads (WebGL). When using `SqliteSaveLoader` with `SaveAsync()`, enable the **Full Mutex** toggle in `SqliteSaveLoaderInstaller`.
 - **Save results.** `Save()` and `SaveAsync()` never throw (the task never faults); they return a `SaveResult`: `Saved`, `Skipped` (nothing written on purpose - loading failed or a restored backup must not be overwritten) or `Failed` with the `Exception`. Every failed save - also a background write nobody awaits - raises `OnSaveFailed` on the main thread; `ConsecutiveSaveFailures` counts them until the next successful save. Use it to tell the player (e.g. a toast after the first failure of a streak) or to report it - mind that IO exception messages contain file paths.
@@ -314,10 +319,15 @@ public class AutoSaveTrigger : MonoBehaviour, Injectable
 | Save Loaders | *(empty)* | `DataSaveLoader` MonoBehaviours whose data is included in the blob. |
 | Load Data On Init | `true` | Automatically calls `Load()` during DI initialisation. |
 | Save Data On Clean | `true` | Automatically calls `Save()` during DI cleanup. |
+| Reset Unreadable Data | `false` | Unreadable data is kept aside and reset to defaults instead of failing the load (see `Load()` above). |
 | Create Backups | `true` | Backs up the game data after every successful load (see *Backups*). |
 | Backups Per Version | `3` | Backups kept per save data version (plus the newest backup of the previous build). |
 | Backup Versions Kept | `3` | Save data versions to keep backups of. |
-| Backup Folder | `Backups` | Relative to `Application.persistentDataPath`, or absolute. |
+| Backup Folder | `Backups` | Relative to `Application.persistentDataPath`, or absolute. Give every `GameDataInstaller` its own folder (or turn backups off): instances sharing one rotate each other's backups away. |
+
+### Several GameDataPersistence instances
+
+All types are bound without an id, so a second instance - e.g. a settings file next to the save game - lives in its own DI scope: a child `GameObjectContext`, or a `ScopedFactory` whose `InitScope` installs a `PersistentDataPathSaveLoaderInstaller` and a `GameDataInstaller` (a scope creates no `NonLazy` instances, so turn **Load Data On Init** / **Save Data On Clean** off and call `Load()` / `Save()` yourself). The child scope shadows `SaveLoader`, `JsonSerializer` and `GameDataPersistence`, while its `DataSaveLoader`s still resolve the parent's bindings. Code that resolves `GameDataPersistence` or `SaveLoader` gets the instance of its own scope - keep the game's save handling outside the settings scope. Give each instance its own file, Game Data Id and backup folder.
 
 ### DataSaveLoader
 
@@ -435,7 +445,7 @@ Use `SerializeToToken` / `Deserialize<T>(JToken)` when working inside `GameDataM
 
 ### Customising serialisation settings
 
-The predefined installers (`PlayerPrefsSaveLoaderInstaller`, `PersistentDataPathSaveLoaderInstaller`, `GameDataInstaller`) bind `JsonSerializer` with default settings. They do **not** bind `JsonSerializerSettings`, so if you need custom formatting, culture, or converters you must bind it yourself before the installer runs:
+The SaveLoader installers (`PlayerPrefsSaveLoaderInstaller`, `PersistentDataPathSaveLoaderInstaller`, `SqliteSaveLoaderInstaller`) bind `JsonSerializer` with default settings; `GameDataInstaller` uses the one they bind. They do **not** bind `JsonSerializerSettings`, so if you need custom formatting, culture, or converters you must bind it yourself before the installer runs:
 
 ```csharp
 binder.Bind<JsonSerializerSettings>()

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -55,6 +56,12 @@ namespace Calluna.Persistence
         // successful Save().
         private bool _saveAllLoaders;
 
+        // Whether the running Load() reset the data to defaults (too old, or unreadable and kept aside).
+        private bool _resetDuringLoad;
+
+        // Suffix label of stored data that Reset Unreadable Data kept aside.
+        private const string UnreadableDataLabel = "unreadable";
+
         // Null when backups are disabled.
         private GameDataBackupStore _backups;
         // Set by RestoreBackup: the loaded (possibly broken) state must not be saved over the restored
@@ -101,37 +108,52 @@ namespace Calluna.Persistence
         /// single-blob format to the new per-key format transparently.
         /// <para>
         /// Loading fails - <see cref="LoadingFailed"/> becomes true and <see cref="LastLoadResult"/>
-        /// tells why - if the data can't be read, a migrator throws or any DataSaveLoader throws. All
-        /// DataSaveLoaders are still tried, so every failed one is reported. A failed load writes
-        /// nothing: migrated data is only stored once every DataSaveLoader has loaded it.
+        /// tells why - if the data can't be read, was saved by a newer game version (above
+        /// CurrentVersion), a migrator throws or any DataSaveLoader throws. All DataSaveLoaders are
+        /// still tried, so every failed one is reported. A failed load writes nothing: migrated data is
+        /// only stored once every DataSaveLoader has loaded it.
+        /// </para>
+        /// <para>
+        /// While the stored data is the one that failed, saving stays blocked - a save would overwrite it.
+        /// A later successful <see cref="Load"/> (e.g. after <see cref="RestoreBackup"/> or
+        /// <see cref="ArchiveStoredData"/>) clears <see cref="LoadingFailed"/> again.
+        /// </para>
+        /// <para>
+        /// With <c>Reset Unreadable Data</c> (see <see cref="GameDataInstaller"/>) data that can't be read,
+        /// migrated or loaded is kept aside as <c>&lt;file&gt;.unreadable-&lt;time&gt;</c> and every
+        /// DataSaveLoader gets its default instead: the load succeeds, <see cref="DataWasReset"/> becomes
+        /// true and <see cref="GameDataLoadResult.RecoveredFrom"/> tells what failed. Not for read errors
+        /// that may pass (the file is locked, access denied), data of a newer game version or an invalid
+        /// setup - those still fail.
         /// </para>
         /// </summary>
         public void Load()
         {
-            _saveAllLoaders = false;
             _backupRestored = false;
-            LastLoadResult = LoadData();
-            if (LastLoadResult.Succeeded)
+            GameDataLoadResult result = LoadData();
+            if (!result.Succeeded && CanResetUnreadableData(result))
+                result = ResetUnreadableData(result);
+
+            LastLoadResult = result;
+            _loadFailed.Value = !result.Succeeded;
+            _dataWasReset.Value = _resetDuringLoad;
+            if (result.Succeeded)
                 return;
 
-            _loadFailed.Value = true;
-            Debug.LogError($"Failed to load game data '{_arguments.GameDataId}': {LastLoadResult}");
-            foreach (Exception exception in LastLoadResult.Exceptions)
+            Debug.LogError($"Failed to load game data '{_arguments.GameDataId}': {result}");
+            foreach (Exception exception in result.Exceptions)
                 Debug.LogException(exception);
         }
 
         /// <summary>
-        /// Saves data from all dirty DataSaveLoaders synchronously on the calling thread.
+        /// Saves the data of all dirty DataSaveLoaders synchronously on the calling thread. Never throws:
+        /// a failure is logged, returned and raised as <see cref="OnSaveFailed"/>.
         /// Loaders that report <c>IsDirty == false</c> are skipped.
         /// After a successful write all loaders are marked clean.
         /// <para>
         /// Waits for a background write started by <see cref="SaveAsync"/> first - otherwise that
         /// write, holding an older snapshot, could finish after this one and overwrite newer data.
         /// </para>
-        /// </summary>
-        /// <summary>
-        /// Saves the data of all dirty DataSaveLoaders synchronously. Never throws: a failure is logged,
-        /// returned and raised as <see cref="OnSaveFailed"/>.
         /// </summary>
         public SaveResult Save()
         {
@@ -367,6 +389,8 @@ namespace Calluna.Persistence
 
         private GameDataLoadResult LoadData()
         {
+            _saveAllLoaders = false;
+            _resetDuringLoad = false;
             try
             {
                 InitMigrators();
@@ -393,6 +417,16 @@ namespace Calluna.Persistence
                 return GameDataLoadResult.Failed(GameDataLoadFailure.Storage, storedVersion, e);
             }
 
+            // Data of a newer game version: the loaders would drop what they don't know, and the next
+            // save would store the rest under the older version - the newer game would then migrate it again.
+            if (storedVersion > currentVersion)
+            {
+                return GameDataLoadResult.Failed(GameDataLoadFailure.NewerVersion, storedVersion,
+                    new InvalidOperationException(
+                        $"The stored data has version {storedVersion}, newer than the current version {currentVersion} - " +
+                        "it was saved by a newer game version."));
+            }
+
             // No save yet, or one too old to migrate: every loader gets its default.
             if (storedVersion == null || storedVersion < minSupportedVersion)
             {
@@ -400,7 +434,7 @@ namespace Calluna.Persistence
                 {
                     Debug.LogWarning(
                         $"The loaded data version {storedVersion} is below the minimum supported version {minSupportedVersion}. The game data was reset.");
-                    _dataWasReset.Value = true;
+                    _resetDuringLoad = true;
                     _saveAllLoaders = true;
                 }
                 return DispatchToLoaders(loadedData, storedVersion);
@@ -460,8 +494,7 @@ namespace Calluna.Persistence
             {
                 List<(int, Dictionary<string, JToken>)> backups = new List<(int, Dictionary<string, JToken>)>(2)
                 {
-                    // Without a migration the data keeps its stored version (newer than the current
-                    // one if an older game version loads a newer save).
+                    // Without a migration the data keeps its stored version.
                     (beforeMigration != null ? currentVersion : storedVersion, loadedData)
                 };
                 if (beforeMigration != null)
@@ -489,6 +522,47 @@ namespace Calluna.Persistence
             FlushPendingWrite();
             archivable.Archive($".{label}-{DateTime.Now:yyyyMMdd_HHmmss}");
             return true;
+        }
+
+        // Read errors that may pass (locked file, denied access) don't make the data unreadable.
+        private bool CanResetUnreadableData(GameDataLoadResult result)
+        {
+            if (!_arguments.ResetUnreadableData)
+                return false;
+            if (result.Failure != GameDataLoadFailure.Storage
+                && result.Failure != GameDataLoadFailure.Migration
+                && result.Failure != GameDataLoadFailure.DataSaveLoader)
+                return false;
+            return !result.Exceptions.Any(e => e is IOException || e is UnauthorizedAccessException);
+        }
+
+        private GameDataLoadResult ResetUnreadableData(GameDataLoadResult failed)
+        {
+            try
+            {
+                // Without a place to keep the data aside, it stays and loading fails.
+                if (!ArchiveStoredData(UnreadableDataLabel))
+                    return failed;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"Couldn't keep the unreadable game data '{_arguments.GameDataId}' aside: {e}");
+                return failed;
+            }
+
+            Debug.LogWarning(
+                $"Game data '{_arguments.GameDataId}' couldn't be loaded ({failed}: " +
+                $"{string.Join("; ", failed.Exceptions.Select(e => $"{e.GetType().Name}: {e.Message}"))}). " +
+                $"It was kept aside with the suffix '.{UnreadableDataLabel}-<time>' and reset to defaults.");
+
+            GameDataLoadResult retry = LoadData();
+            if (!retry.Succeeded)
+                return retry;
+
+            _resetDuringLoad = true;
+            // Loaders with dirty tracking must write their defaults into the now empty storage.
+            _saveAllLoaders = true;
+            return GameDataLoadResult.Recovered(failed);
         }
 
         private static Dictionary<string, JToken> DeepClone(Dictionary<string, JToken> data) =>
@@ -641,6 +715,9 @@ namespace Calluna.Persistence
 
             /// <summary>Null disables backups.</summary>
             public GameDataBackupStore.Settings Backups;
+
+            /// <summary>See <see cref="GameDataPersistence.Load"/>.</summary>
+            public bool ResetUnreadableData;
         }
     }
 }

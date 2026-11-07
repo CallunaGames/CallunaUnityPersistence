@@ -34,17 +34,20 @@ namespace Calluna.Persistence.Tests
         [TearDown]
         public void TearDown()
         {
-            // Ensure streams are closed before deletion.
             try { ((Calluna.DI.Cleanable)_loader).Clean(); } catch { /* ignore */ }
-            if (File.Exists(_tempFilePath))
-                File.Delete(_tempFilePath);
+            // The loader writes into persistentDataPath, not to _tempFilePath itself.
+            foreach (string path in new[] { _tempFilePath, ActualPath, ActualPath + ".tmp" })
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
         }
 
         // -----------------------------------------------------------------------
         // Helper
         // -----------------------------------------------------------------------
 
-        private static PersistentDataPathSaveLoader BuildLoader(string fullPath)
+        private static PersistentDataPathSaveLoader BuildLoader(string fullPath, bool indented = false)
         {
             Mock<Resolver> serializerResolver = new Mock<Resolver>();
             serializerResolver.Setup(r => r.ResolveOptional<Newtonsoft.Json.JsonSerializerSettings>())
@@ -66,7 +69,7 @@ namespace Calluna.Persistence.Tests
             loaderResolver.Setup(r => r.Resolve<JsonSerializer>()).Returns(serializer);
             loaderResolver.Setup(r => r.Resolve<TextFileReadWriter>()).Returns(readWriter);
             loaderResolver.Setup(r => r.Resolve<PersistentDataPathSaveLoader.Arguments>())
-                .Returns(new PersistentDataPathSaveLoader.Arguments { FileName = fileName });
+                .Returns(new PersistentDataPathSaveLoader.Arguments { FileName = fileName, Indented = indented });
 
             PersistentDataPathSaveLoader loader = new PersistentDataPathSaveLoader();
             ((Injectable)loader).Inject(loaderResolver.Object);
@@ -410,7 +413,6 @@ namespace Calluna.Persistence.Tests
             Assert.That(ReadKeysFromFile(), Does.Not.Contain("a"));
         }
 
-        // The loader keeps the file open for reading and writing, but shares it for reading.
         private System.Collections.Generic.ICollection<string> ReadKeysFromFile()
         {
             using FileStream stream = new FileStream(ActualPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -446,6 +448,117 @@ namespace Calluna.Persistence.Tests
                 if (File.Exists(archived))
                     File.Delete(archived);
             }
+        }
+
+        // -----------------------------------------------------------------------
+        // 1.12.0 — atomic writes, no open file, unreadable files, indentation
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [Description("Save() => the file is complete and no temporary file is left behind.")]
+        public void Save_WritesFileWithoutLeavingTempFile()
+        {
+            _loader.Save("a", 1);
+            _loader.Save("b", 2);
+
+            Assert.That(ReadKeysFromFile(), Is.EquivalentTo(new[] { "a", "b" }));
+            Assert.That(File.Exists(ActualPath + ".tmp"), Is.False);
+        }
+
+        [Test]
+        [Description("While the loader is in use (no Clean()) the file isn't kept open: another program can replace " +
+                     "or delete it. Before 1.12.0 it stayed open until Clean().")]
+        public void Save_KeepsNoFileOpen()
+        {
+            _loader.Save("key", 1);
+
+            Assert.DoesNotThrow(() =>
+            {
+                using FileStream exclusive = new FileStream(ActualPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            });
+            Assert.DoesNotThrow(() => File.Delete(ActualPath));
+        }
+
+        [Test]
+        [Description("A stale temporary file (from a crash in the middle of a write) => replaced by the next save.")]
+        public void Save_StaleTempFile_IsReplaced()
+        {
+            File.WriteAllText(ActualPath + ".tmp", "{ broken");
+
+            _loader.Save("key", 3);
+
+            Assert.That(File.Exists(ActualPath + ".tmp"), Is.False);
+            Assert.That(ReadKeysFromFile(), Does.Contain("key"));
+        }
+
+        [Test]
+        [TestCase("")]
+        [TestCase("   \r\n")]
+        [TestCase("null")]
+        [Description("An existing file that is empty or not a JSON object => reading throws InvalidDataException. " +
+                     "Before 1.12.0 it was silently read as no data, and the next save overwrote it.")]
+        public void Read_EmptyOrNullFile_Throws(string content)
+        {
+            File.WriteAllText(ActualPath, content);
+
+            Assert.Throws<InvalidDataException>(() => _loader.Has("key"));
+            Assert.Throws<InvalidDataException>(() => _loader.Load("key", 0));
+        }
+
+        [Test]
+        [Description("A cut-off JSON file => reading throws, and the file is left as it is.")]
+        public void Read_CutOffFile_ThrowsAndKeepsFile()
+        {
+            File.WriteAllText(ActualPath, "{\"key\": 1, \"oth");
+
+            Assert.That(() => _loader.Load("key", 0), Throws.Exception);
+            Assert.That(File.ReadAllText(ActualPath), Is.EqualTo("{\"key\": 1, \"oth"));
+        }
+
+        [Test]
+        [Description("Load() of a missing key without a file => default, and no file is created.")]
+        public void Load_NoFile_ReturnsDefaultWithoutCreatingIt()
+        {
+            Assert.That(_loader.Load("key", 5), Is.EqualTo(5));
+            Assert.That(File.Exists(ActualPath), Is.False);
+        }
+
+        [Test]
+        [Description("Clear() => also deletes a stale temporary file.")]
+        public void Clear_DeletesStaleTempFile()
+        {
+            _loader.Save("key", 1);
+            File.WriteAllText(ActualPath + ".tmp", "{}");
+
+            _loader.Clear();
+
+            Assert.That(File.Exists(ActualPath), Is.False);
+            Assert.That(File.Exists(ActualPath + ".tmp"), Is.False);
+        }
+
+        [Test]
+        [Description("Indented = true => the file is written over several lines and still reads back.")]
+        public void Indented_WritesReadableJson()
+        {
+            PersistentDataPathSaveLoader indented = BuildLoader(_tempFilePath, indented: true);
+
+            indented.Save("key", new SamplePayload { Tag = "a", Count = 1 });
+
+            Assert.That(File.ReadAllText(ActualPath), Does.Contain("\n"));
+            PersistentDataPathSaveLoader reader = BuildLoader(_tempFilePath);
+            Assert.That(reader.Load<SamplePayload>("key").Tag, Is.EqualTo("a"));
+        }
+
+        [Test]
+        [Description("Saves from several threads at once (SaveAsync writes on a background thread) => every entry " +
+                     "ends up in the file.")]
+        public void Save_FromSeveralThreads_KeepsAllEntries()
+        {
+            System.Threading.Tasks.Parallel.For(0, 20, i => _loader.Save($"key{i}", i));
+
+            PersistentDataPathSaveLoader reader = BuildLoader(_tempFilePath);
+            for (int i = 0; i < 20; i++)
+                Assert.That(reader.Load($"key{i}", -1), Is.EqualTo(i));
         }
     }
 }
