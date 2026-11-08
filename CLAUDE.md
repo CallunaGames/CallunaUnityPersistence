@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Package Overview
 
-`com.calluna.persistence` (v1.3.0) — A Unity UPM package for game data persistence. Provides serialization, versioning, and migration of save data with two storage backends: PlayerPrefs and persistent data path (file-based). Depends on `com.calluna.core` and `com.calluna.di` for dependency injection, and Newtonsoft.Json for serialization.
+`com.calluna.persistence` — A Unity UPM package for game data persistence (version: see `package.json`). Provides serialization, versioning, and migration of save data with three storage backends: PlayerPrefs, persistent data path (one JSON file) and SQLite. Depends on `com.calluna.core` and `com.calluna.di` for dependency injection, and Newtonsoft.Json for serialization.
 
 ## Build & Test
 
@@ -18,9 +18,10 @@ There are two distinct persistence systems:
 
 ### 1. Low-Level: `SaveLoader` (single key-value pairs)
 
-`SaveLoader` (interface in `Runtime/SaveLoader/`) defines `Has`, `Load<T>`, `Save<T>`, `Delete`, `Clear`. Two implementations:
+`SaveLoader` (interface in `Runtime/SaveLoader/`) defines `Has`, `Load<T>`, `Save<T>`, `Delete`, `Clear`. Three implementations:
 - `PlayerPrefsSaveLoader` — primitives go directly to PlayerPrefs; complex types serialize to JSON
-- `PersistentDataPathSaveLoader` — stores all data as `Dictionary<string, JToken>` in a single JSON file at `Application.persistentDataPath`. Keeps file streams open for performance. The `FileName` argument is configured during DI binding.
+- `PersistentDataPathSaveLoader` — stores all data as `Dictionary<string, JToken>` in a single JSON file at `Application.persistentDataPath`. Reads the file once, writes it atomically (temp file + replace) and keeps no file open; an empty or non-object file throws instead of reading as no data. The `FileName` and `Indented` arguments are configured during DI binding.
+- `SqliteSaveLoader` — one row per key in a SQLite database; a save is one transaction.
 
 For single-type versioned data, `VersionedDataSaveLoader` wraps a `SaveLoader` and applies `DataMigrator<T>` instances automatically on load.
 

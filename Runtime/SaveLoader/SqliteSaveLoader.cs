@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading;
 using Calluna.DI;
+using Newtonsoft.Json;
 using SQLite;
 using UnityEngine;
 
@@ -102,7 +103,16 @@ namespace Calluna.Persistence
         public T Load<T>(string id, T defaultValue = default)
         {
             Entry entry = RunLocked(connection => connection.Find<Entry>(id));
-            return entry == null ? defaultValue : _serializer.Deserialize<T>(entry.Value);
+            if (entry == null)
+                return defaultValue;
+            try
+            {
+                return _serializer.Deserialize<T>(entry.Value);
+            }
+            catch (JsonReaderException e)
+            {
+                throw new UnreadableDataException($"The entry '{id}' in '{_path}' isn't valid JSON.", e);
+            }
         }
 
         public void Save<T>(string id, T value)
@@ -210,12 +220,20 @@ namespace Calluna.Persistence
         // Must be called with the read lock held.
         private TResult Run<TResult>(Func<SQLiteConnection, TResult> operation)
         {
-            if (_batchConnection != null)
-                return operation(_batchConnection);
-            if (!_isCleaned)
-                return operation(Connection);
-            using SQLiteConnection shortLived = OpenConnection();
-            return operation(shortLived);
+            try
+            {
+                if (_batchConnection != null)
+                    return operation(_batchConnection);
+                if (!_isCleaned)
+                    return operation(Connection);
+                using SQLiteConnection shortLived = OpenConnection();
+                return operation(shortLived);
+            }
+            // Only a broken database - not a busy/locked one or denied access, which may pass.
+            catch (SQLiteException e) when (e.Result is SQLite3.Result.Corrupt or SQLite3.Result.NonDBFile)
+            {
+                throw new UnreadableDataException($"'{_path}' is corrupt ({e.Result}).", e);
+            }
         }
 
         private void EndBatch()
@@ -262,19 +280,28 @@ namespace Calluna.Persistence
                 flags |= SQLiteOpenFlags.FullMutex;
 
             SQLiteConnection conn = new SQLiteConnection(_path, flags);
+            try
+            {
+                // WAL mode avoids a rollback journal file and per-write fsync, giving significantly
+                // better write throughput for the many small writes produced by per-key saves.
+                conn.ExecuteScalar<string>("PRAGMA journal_mode=WAL;");
 
-            // WAL mode avoids a rollback journal file and per-write fsync, giving significantly
-            // better write throughput for the many small writes produced by per-key saves.
-            conn.ExecuteScalar<string>("PRAGMA journal_mode=WAL;");
+                // synchronous=OFF removes WAL frame syncing entirely, reducing per-transaction
+                // overhead from ~2ms to ~0.1ms. Risk: data may be lost on OS crash or power loss
+                // (not on application crash — SQLite always rolls back uncommitted transactions).
+                if (_synchronousOff)
+                    conn.ExecuteScalar<string>("PRAGMA synchronous=OFF;");
 
-            // synchronous=OFF removes WAL frame syncing entirely, reducing per-transaction
-            // overhead from ~2ms to ~0.1ms. Risk: data may be lost on OS crash or power loss
-            // (not on application crash — SQLite always rolls back uncommitted transactions).
-            if (_synchronousOff)
-                conn.ExecuteScalar<string>("PRAGMA synchronous=OFF;");
-
-            conn.CreateTable<Entry>();
-            return conn;
+                conn.CreateTable<Entry>();
+                return conn;
+            }
+            catch
+            {
+                // E.g. not a database: the file mustn't stay open until the GC finalizes the connection -
+                // keeping it aside (ArchiveStoredData) moves it right after.
+                conn.Close();
+                throw;
+            }
         }
 
         private static void DeleteDatabaseFiles(string path)

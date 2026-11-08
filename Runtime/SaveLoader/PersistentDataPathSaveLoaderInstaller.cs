@@ -13,11 +13,14 @@ namespace Calluna.Persistence
     {
         [SerializeField] private string _fileName = "SaveData.txt";
 
+        [Tooltip("Writes indented, human-readable JSON - e.g. for a settings file players may open. Off: one line.")]
+        [SerializeField] private bool _indented;
+
         public override void InstallBindings(Binder binder)
         {
             binder.Bind<SaveLoader>()
                 .ToNew<PersistentDataPathSaveLoader>()
-                .WithArgument(new PersistentDataPathSaveLoader.Arguments { FileName = _fileName })
+                .WithArgument(new PersistentDataPathSaveLoader.Arguments { FileName = _fileName, Indented = _indented })
                 .AsSingle();
 
             binder.BindToNewSelf<TextFileReadWriter>()

@@ -23,6 +23,12 @@ namespace Calluna.Persistence
 
         /// <summary>One or more DataSaveLoaders threw - see <see cref="GameDataLoadResult.FailedDataIds"/>.</summary>
         DataSaveLoader,
+
+        /// <summary>
+        /// The stored data has a newer version than the current one - a newer game version saved it.
+        /// Loading it would lose what this version doesn't know.
+        /// </summary>
+        NewerVersion,
     }
 
     /// <summary>
@@ -39,22 +45,35 @@ namespace Calluna.Persistence
 
         public GameDataLoadFailure Failure { get; }
 
+        /// <summary>
+        /// The failure the load recovered from by keeping the stored data aside and resetting it to
+        /// defaults (Reset Unreadable Data, see <see cref="GameDataInstaller"/>); <see cref="GameDataLoadFailure.None"/>
+        /// otherwise. <see cref="StoredVersion"/>, <see cref="FailedDataIds"/> and <see cref="Exceptions"/>
+        /// then describe that failure.
+        /// </summary>
+        public GameDataLoadFailure RecoveredFrom { get; }
+
         /// <summary>The version the stored data had, or null if there was none (or it couldn't be read).</summary>
         public int? StoredVersion { get; }
 
         /// <summary>The ids of the DataSaveLoaders that threw while loading their data.</summary>
         public IReadOnlyList<string> FailedDataIds { get; }
 
-        /// <summary>The exceptions that made loading fail - one per failed DataSaveLoader, otherwise one.</summary>
+        /// <summary>
+        /// The exceptions that made loading fail (or that it recovered from) - one per failed
+        /// DataSaveLoader, otherwise one.
+        /// </summary>
         public IReadOnlyList<Exception> Exceptions { get; }
 
         internal GameDataLoadResult(GameDataLoadFailure failure, int? storedVersion,
-            IReadOnlyList<string> failedDataIds, IReadOnlyList<Exception> exceptions)
+            IReadOnlyList<string> failedDataIds, IReadOnlyList<Exception> exceptions,
+            GameDataLoadFailure recoveredFrom = GameDataLoadFailure.None)
         {
             Failure = failure;
             StoredVersion = storedVersion;
             FailedDataIds = failedDataIds;
             Exceptions = exceptions;
+            RecoveredFrom = recoveredFrom;
         }
 
         internal static GameDataLoadResult Success(int? storedVersion) =>
@@ -63,9 +82,19 @@ namespace Calluna.Persistence
         internal static GameDataLoadResult Failed(GameDataLoadFailure failure, int? storedVersion, Exception exception) =>
             new GameDataLoadResult(failure, storedVersion, Array.Empty<string>(), new[] { exception });
 
-        public override string ToString() => Succeeded
-            ? "Loaded"
-            : $"{Failure} failure (stored version {StoredVersion?.ToString() ?? "none"}" +
-              (FailedDataIds.Count > 0 ? $", failed data: {string.Join(", ", FailedDataIds)}" : "") + ")";
+        internal static GameDataLoadResult Recovered(GameDataLoadResult failed) =>
+            new GameDataLoadResult(GameDataLoadFailure.None, failed.StoredVersion, failed.FailedDataIds,
+                failed.Exceptions, failed.Failure);
+
+        public override string ToString()
+        {
+            if (Succeeded && RecoveredFrom == GameDataLoadFailure.None)
+                return "Loaded";
+            string details = $"stored version {StoredVersion?.ToString() ?? "none"}" +
+                             (FailedDataIds.Count > 0 ? $", failed data: {string.Join(", ", FailedDataIds)}" : "");
+            return Succeeded
+                ? $"Reset to defaults after a {RecoveredFrom} failure ({details})"
+                : $"{Failure} failure ({details})";
+        }
     }
 }

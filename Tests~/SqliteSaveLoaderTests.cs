@@ -549,5 +549,42 @@ namespace Calluna.Persistence.Tests
                 DeleteIfExists(archived + "-shm");
             }
         }
+
+        // -----------------------------------------------------------------------
+        // 1.12.0 — UnreadableDataException for broken data only
+        // -----------------------------------------------------------------------
+
+        [Test]
+        [Description("A file that isn't a database => UnreadableDataException, and the file isn't left open " +
+                     "(it can be kept aside right away).")]
+        public void NotADatabase_ThrowsUnreadableDataAndKeepsNoFileOpen()
+        {
+            File.WriteAllText(ActualPath, new string('x', 4096));
+
+            Assert.Throws<UnreadableDataException>(() => _loader.Has("key"));
+            Assert.Throws<UnreadableDataException>(() => _loader.Load("key", 0));
+            Assert.DoesNotThrow(() => File.Move(ActualPath, ActualPath + ".moved"));
+            DeleteIfExists(ActualPath + ".moved");
+        }
+
+        [Test]
+        [Description("An entry that isn't valid JSON => UnreadableDataException.")]
+        public void InvalidJsonEntry_ThrowsUnreadableData()
+        {
+            _loader.Save("key", 1);
+            ((Cleanable)_loader).Clean();
+            using (SQLite.SQLiteConnection connection = new SQLite.SQLiteConnection(ActualPath))
+                connection.Execute("UPDATE entries SET value = ? WHERE key = ?", "{broken", "key");
+
+            SqliteSaveLoader fresh = BuildLoader(_tempFileName);
+            try
+            {
+                Assert.Throws<UnreadableDataException>(() => fresh.Load("key", 0));
+            }
+            finally
+            {
+                ((Cleanable)fresh).Clean();
+            }
+        }
     }
 }

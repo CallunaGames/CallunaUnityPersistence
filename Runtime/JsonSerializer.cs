@@ -25,6 +25,13 @@ namespace Calluna.Persistence
         public string Serialize<T>(T value) =>
             JsonConvert.SerializeObject(value, _settings);
 
+        /// <summary>
+        /// Like <see cref="Serialize{T}(T)"/>, but with <paramref name="formatting"/> instead of the settings'
+        /// one - everything else of the bound settings applies.
+        /// </summary>
+        public string Serialize<T>(T value, Formatting formatting) =>
+            JsonConvert.SerializeObject(value, formatting, _settings);
+
         public JToken SerializeToToken<T>(T value) =>
             JToken.FromObject(value, _jsonSerializer);
 

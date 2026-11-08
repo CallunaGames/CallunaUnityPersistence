@@ -1,3 +1,25 @@
+## [1.12.0] - 2026-11-08
+
+Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.6.0. Consolidates 1.12.0-pre.1 and pre.2. Makes a second `GameDataPersistence` for settings in a JSON file (cloud-synced) next to the save game safe to use.
+
+### Added
+- **Reset Unreadable Data** (`GameDataInstaller`, off by default): broken data is kept aside as `<file>.unreadable-<time>` and every `DataSaveLoader` gets its default, instead of failing the load and blocking every save. Broken means: the SaveLoader throws `UnreadableDataException`, or a migrator or `DataSaveLoader` throws. The load succeeds with `DataWasReset`, and the new `GameDataLoadResult.RecoveredFrom` names the failure. Other storage errors (a locked file, denied access), data of a newer version and configuration errors still fail. For data that is cheap to lose but must never block the game, e.g. settings.
+- `UnreadableDataException`: a SaveLoader throws it when the stored data itself is broken, as opposed to a failure that may pass. `PersistentDataPathSaveLoader`: an empty, `null` or invalid JSON file. `SqliteSaveLoader`: a corrupt database, a file that isn't one, an entry that isn't valid JSON. `PlayerPrefsSaveLoader`: an entry that isn't valid JSON. The original exception is the inner exception.
+- `PersistentDataPathSaveLoaderInstaller` **Indented**: writes human-readable JSON with the bound `JsonSerializerSettings`.
+- `JsonSerializer.Serialize(value, formatting)`: serializes with the bound settings, only the formatting replaced.
+- README: *Several GameDataPersistence instances* (own DI scope, own file, Game Data Id and backup folder).
+
+### Changed
+- **Stored data of a newer version fails the load** (`GameDataLoadFailure.NewerVersion`, `LoadingFailed`), nothing is written. Before, an older game version loaded it without migration, dropped what it didn't know and saved the rest under its older version - the newer game then migrated it again. Relevant for downgrades, e.g. switching from a beta branch back, or a cloud-synced file shared by two game versions.
+- **A successful `Load()` clears `LoadingFailed`** (and sets `DataWasReset` to the outcome of that load). Before, only `Initialize()` cleared it, so a retry after `ArchiveStoredData()` or `RestoreBackup()` within the same context still blocked every save.
+- **`PersistentDataPathSaveLoader` writes atomically and keeps no file open.** The content goes to `<file>.tmp`, flushed to disk, which then replaces the file - a crash while writing leaves the previous file. Before, the file was truncated and rewritten in place (a crash left it empty or cut off) and stayed open with read-only sharing until `Clean()`, so other programs couldn't replace it. A write costs about 2-4 ms instead of 0.1 ms for a small file; the open streams (1.1, to save allocations) date from before batched saves.
+- **Broken stored data throws `UnreadableDataException`** instead of the backend's own exception (Newtonsoft's for invalid JSON, `SQLiteException` for a corrupt database) - catch that one if you handled those. `PersistentDataPathSaveLoader` also treats an empty file or `null` as broken; before, it was silently read as no data and the next save overwrote it with defaults. A missing file is still no data, and reading no longer creates an empty file.
+
+### Fixed
+- `PersistentDataPathSaveLoader` is thread-safe: a `SaveAsync()` write on the background thread no longer races with the main thread (including `Clean()` closing the streams in the middle of a write).
+- `SqliteSaveLoader`: a connection that fails to open (e.g. not a database) is closed right away instead of keeping the file open until garbage collection, so the file can be kept aside (`ArchiveStoredData`).
+- Docs: the package CLAUDE.md (version, backends), README on which installers bind `JsonSerializer`, the doubled summary of `Save()`; the tests of `PersistentDataPathSaveLoader` no longer leave files in `persistentDataPath`.
+
 ## [1.11.0] - 2026-10-20
 
 Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.6.0. Tested in the game (failed autosaves with a write-protected save file).

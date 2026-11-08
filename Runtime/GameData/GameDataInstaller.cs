@@ -15,6 +15,11 @@ namespace Calluna.Persistence
         private int _minSupportedVersion = 0;
         [SerializeField] private bool _loadDataOnInit = true;
         [SerializeField] private bool _saveDataOnClean = true;
+        [Tooltip("Data that can't be read, migrated or loaded is kept aside (<file>.unreadable-<time>) and " +
+                 "every DataSaveLoader gets its default, instead of failing the load and blocking saves. For " +
+                 "data that is easy to lose but must never block the game, e.g. settings. Off for a save game: " +
+                 "its failed load should be shown to the player (backups, start over).")]
+        [SerializeField] private bool _resetUnreadableData;
 
         [Header("Backups")]
         [Tooltip("Backs up the game data after every successful load, so a save that can't be loaded " +
@@ -27,7 +32,8 @@ namespace Calluna.Persistence
                  "back after an update. Backups of newer versions are never deleted.")]
         [SerializeField, Min(1)] private int _backupVersionsKept = 3;
         [Tooltip("Folder of the backups - relative to Application.persistentDataPath, or absolute. " +
-                 "Keep it out of cloud sync if the save folder is synced.")]
+                 "Keep it out of cloud sync if the save folder is synced. Give every GameDataInstaller its " +
+                 "own folder: instances sharing one rotate each other's backups away.")]
         [SerializeField] private string _backupFolder = "Backups";
         
         public override void InstallBindings(Binder binder)
@@ -39,6 +45,7 @@ namespace Calluna.Persistence
                 SaveLoaders = _saveLoaders.ConvertAll(x => (IDataSaveLoader)x),
                 MinSupportedVersion = _minSupportedVersion,
                 CurrentVersion = _currentVersion,
+                ResetUnreadableData = _resetUnreadableData,
                 Backups = _createBackups
                     ? new GameDataBackupStore.Settings
                     {
