@@ -1,6 +1,6 @@
-## [1.12.0-pre.1] - 2026-11-07
+## [1.12.0] - 2026-11-08
 
-Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.6.0. Prepares a second `GameDataPersistence` for settings in a JSON file (cloud-synced) next to the save game.
+Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.6.0. Consolidates 1.12.0-pre.1. Prepares a second `GameDataPersistence` for settings in a JSON file (cloud-synced) next to the save game.
 
 ### Added
 - **Reset Unreadable Data** (`GameDataInstaller`, off by default): data that can't be read, migrated or loaded is kept aside as `<file>.unreadable-<time>` and every `DataSaveLoader` gets its default, instead of failing the load and blocking every save. The load succeeds with `DataWasReset`, and the new `GameDataLoadResult.RecoveredFrom` names the failure. Read errors that may pass (`IOException`, `UnauthorizedAccessException`), data of a newer version and configuration errors still fail. For data that is cheap to lose but must never block the game, e.g. settings.
