@@ -171,10 +171,8 @@ namespace Calluna.Persistence
             }
 
             _hasUnwrittenChanges = false;
-            // The entries are tokens already - the serializer's settings (culture, converters) don't
-            // apply to them anymore, only the layout does.
             string content = _indented
-                ? JsonConvert.SerializeObject(persistedData, Formatting.Indented)
+                ? _serializer.Serialize(persistedData, Formatting.Indented)
                 : _serializer.Serialize(persistedData);
             _textFileReadWriter.WriteAtomic(_path, content);
         }

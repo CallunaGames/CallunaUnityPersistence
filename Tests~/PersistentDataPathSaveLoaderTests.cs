@@ -47,11 +47,12 @@ namespace Calluna.Persistence.Tests
         // Helper
         // -----------------------------------------------------------------------
 
-        private static PersistentDataPathSaveLoader BuildLoader(string fullPath, bool indented = false)
+        private static PersistentDataPathSaveLoader BuildLoader(string fullPath, bool indented = false,
+            Newtonsoft.Json.JsonSerializerSettings settings = null)
         {
             Mock<Resolver> serializerResolver = new Mock<Resolver>();
             serializerResolver.Setup(r => r.ResolveOptional<Newtonsoft.Json.JsonSerializerSettings>())
-                .Returns((Newtonsoft.Json.JsonSerializerSettings)null);
+                .Returns(settings);
             serializerResolver.Setup(r => r.ResolveOptional<Newtonsoft.Json.JsonSerializer>())
                 .Returns((Newtonsoft.Json.JsonSerializer)null);
 
@@ -547,6 +548,25 @@ namespace Calluna.Persistence.Tests
             Assert.That(File.ReadAllText(ActualPath), Does.Contain("\n"));
             PersistentDataPathSaveLoader reader = BuildLoader(_tempFilePath);
             Assert.That(reader.Load<SamplePayload>("key").Tag, Is.EqualTo("a"));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        [Description("Bound JsonSerializerSettings apply to the file, indented or not (here: non-ASCII escaped). " +
+                     "In 1.12.0-pre.1 the indented file ignored them.")]
+        public void Save_UsesBoundSerializerSettings(bool indented)
+        {
+            Newtonsoft.Json.JsonSerializerSettings settings = new Newtonsoft.Json.JsonSerializerSettings
+            {
+                StringEscapeHandling = Newtonsoft.Json.StringEscapeHandling.EscapeNonAscii,
+            };
+            PersistentDataPathSaveLoader loader = BuildLoader(_tempFilePath, indented, settings);
+
+            loader.Save("key", "ä");
+
+            string text = File.ReadAllText(ActualPath);
+            Assert.That(text, Does.Contain("\\u00e4"));
+            Assert.That(text.Contains("\n"), Is.EqualTo(indented));
         }
 
         [Test]
