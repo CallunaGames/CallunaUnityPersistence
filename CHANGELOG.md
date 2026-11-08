@@ -1,11 +1,25 @@
-## [1.12.0] - 2026-11-08
+## [1.12.0-pre.2] - 2026-11-08
 
-Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.6.0. Consolidates 1.12.0-pre.1. Prepares a second `GameDataPersistence` for settings in a JSON file (cloud-synced) next to the save game.
+Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.6.0.
+
+### Added
+- `UnreadableDataException`: a SaveLoader throws it when the stored data itself is broken, as opposed to a failure that may pass (a locked file, denied access). `PersistentDataPathSaveLoader`: an empty, `null` or invalid JSON file (pre.1: `InvalidDataException` or Newtonsoft's exception). `SqliteSaveLoader`: a corrupt database, a file that isn't one, an entry that isn't valid JSON. `PlayerPrefsSaveLoader`: an entry that isn't valid JSON. The original exception is the inner exception.
+- `JsonSerializer.Serialize(value, formatting)`: serializes with the bound settings, only the formatting replaced.
+
+### Changed
+- **Reset Unreadable Data resets a `Storage` failure only on `UnreadableDataException`** - which data is broken, only the SaveLoader knows. pre.1 decided in `GameDataPersistence` by exception type (all but `IOException` and `UnauthorizedAccessException`), which assumed a file and was wrong for SQLite: a busy or locked database would have been kept aside and reset. Migration and DataSaveLoader failures are reset as before.
+
+### Fixed
+- `PersistentDataPathSaveLoader` **Indented** ignored the bound `JsonSerializerSettings` (e.g. `StringEscapeHandling`); it uses them now, only the formatting replaced.
+- `SqliteSaveLoader`: a connection that fails to open (e.g. not a database) is closed right away instead of keeping the file open until garbage collection - it couldn't be kept aside (`ArchiveStoredData`) before.
+
+## [1.12.0-pre.1] - 2026-11-07
+
+Requires `com.calluna.core` 1.7.0 and `com.calluna.di` 1.6.0. Prepares a second `GameDataPersistence` for settings in a JSON file (cloud-synced) next to the save game.
 
 ### Added
 - **Reset Unreadable Data** (`GameDataInstaller`, off by default): data that can't be read, migrated or loaded is kept aside as `<file>.unreadable-<time>` and every `DataSaveLoader` gets its default, instead of failing the load and blocking every save. The load succeeds with `DataWasReset`, and the new `GameDataLoadResult.RecoveredFrom` names the failure. Read errors that may pass (`IOException`, `UnauthorizedAccessException`), data of a newer version and configuration errors still fail. For data that is cheap to lose but must never block the game, e.g. settings.
-- `PersistentDataPathSaveLoaderInstaller` **Indented**: writes human-readable JSON, with the bound `JsonSerializerSettings` otherwise unchanged (in 1.12.0-pre.1 the indented file ignored them).
-- `JsonSerializer.Serialize(value, formatting)`: serializes with the bound settings, only the formatting replaced.
+- `PersistentDataPathSaveLoaderInstaller` **Indented**: writes human-readable JSON.
 - README: *Several GameDataPersistence instances* (own DI scope, own file, Game Data Id and backup folder).
 
 ### Changed

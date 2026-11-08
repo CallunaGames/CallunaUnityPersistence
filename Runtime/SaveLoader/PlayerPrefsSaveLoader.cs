@@ -41,7 +41,14 @@ namespace Calluna.Persistence
                 return (T)(object)PlayerPrefs.GetFloat(key);
             if(type == typeof(bool))
                 return (T)(object)(PlayerPrefs.GetInt(key) != 0);
-            return _serializer.Deserialize<T>(PlayerPrefs.GetString(key));
+            try
+            {
+                return _serializer.Deserialize<T>(PlayerPrefs.GetString(key));
+            }
+            catch (Newtonsoft.Json.JsonReaderException e)
+            {
+                throw new UnreadableDataException($"The PlayerPrefs entry '{key}' isn't valid JSON.", e);
+            }
         }
 
         public void Save<T>(string id, T value)

@@ -1482,7 +1482,7 @@ namespace Calluna.Persistence.Tests
         public void Load_UnreadableData_ResetOption_KeepsItAsideAndLoadsDefaults()
         {
             ArchivableStore store = ArchivableWithData(1, "data");
-            store.LoadException = new InvalidDataException("Simulated broken file");
+            store.LoadException = new UnreadableDataException("Simulated broken file");
             DirtyTrackingStub loader = new DirtyTrackingStub("data");
             GameDataPersistence persistence = BuildPersistence(store, 0, 1, new IDataSaveLoader[] { loader },
                 resetUnreadableData: true);
@@ -1493,7 +1493,7 @@ namespace Calluna.Persistence.Tests
             Assert.That(persistence.DataWasReset.Value, Is.True);
             Assert.That(persistence.LastLoadResult.Succeeded, Is.True);
             Assert.That(persistence.LastLoadResult.RecoveredFrom, Is.EqualTo(GameDataLoadFailure.Storage));
-            Assert.That(persistence.LastLoadResult.Exceptions[0], Is.InstanceOf<InvalidDataException>());
+            Assert.That(persistence.LastLoadResult.Exceptions[0], Is.InstanceOf<UnreadableDataException>());
             Assert.That(store.ArchivedSuffix, Does.StartWith(".unreadable-"));
 
             loader._isDirty = false;
@@ -1523,7 +1523,7 @@ namespace Calluna.Persistence.Tests
         }
 
         [Test]
-        [Description("A read error that may pass (IOException, e.g. a locked file) with Reset Unreadable Data => " +
+        [Description("A storage error that isn't UnreadableDataException (here: a locked file) with Reset Unreadable Data => " +
                      "the load fails and the data stays: it isn't broken.")]
         public void Load_IOException_ResetOption_StaysFailedAndKeepsData()
         {

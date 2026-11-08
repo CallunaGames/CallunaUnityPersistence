@@ -496,14 +496,14 @@ namespace Calluna.Persistence.Tests
         [TestCase("")]
         [TestCase("   \r\n")]
         [TestCase("null")]
-        [Description("An existing file that is empty or not a JSON object => reading throws InvalidDataException. " +
+        [Description("An existing file that is empty or not a JSON object => reading throws UnreadableDataException. " +
                      "Before 1.12.0 it was silently read as no data, and the next save overwrote it.")]
         public void Read_EmptyOrNullFile_Throws(string content)
         {
             File.WriteAllText(ActualPath, content);
 
-            Assert.Throws<InvalidDataException>(() => _loader.Has("key"));
-            Assert.Throws<InvalidDataException>(() => _loader.Load("key", 0));
+            Assert.Throws<UnreadableDataException>(() => _loader.Has("key"));
+            Assert.Throws<UnreadableDataException>(() => _loader.Load("key", 0));
         }
 
         [Test]
@@ -512,7 +512,7 @@ namespace Calluna.Persistence.Tests
         {
             File.WriteAllText(ActualPath, "{\"key\": 1, \"oth");
 
-            Assert.That(() => _loader.Load("key", 0), Throws.Exception);
+            Assert.That(() => _loader.Load("key", 0), Throws.TypeOf<UnreadableDataException>());
             Assert.That(File.ReadAllText(ActualPath), Is.EqualTo("{\"key\": 1, \"oth"));
         }
 

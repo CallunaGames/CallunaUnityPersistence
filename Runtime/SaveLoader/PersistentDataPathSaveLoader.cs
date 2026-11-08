@@ -20,8 +20,9 @@ namespace Calluna.Persistence
     /// </para>
     /// <para>
     /// A file that exists but is empty or isn't a JSON object can't be read: <see cref="Has"/> and
-    /// <see cref="Load{T}"/> throw (<see cref="GameDataPersistence"/> reports it as a
-    /// <see cref="GameDataLoadFailure.Storage"/> failure) instead of silently starting without data.
+    /// <see cref="Load{T}"/> throw <see cref="UnreadableDataException"/> (<see cref="GameDataPersistence"/>
+    /// reports it as a <see cref="GameDataLoadFailure.Storage"/> failure) instead of silently starting
+    /// without data. Read errors of the file system (locked, denied) are thrown as they are.
     /// </para>
     /// <para>Thread-safe: <see cref="GameDataPersistence.SaveAsync"/> writes on a background thread.</para>
     /// </summary>
@@ -157,9 +158,17 @@ namespace Calluna.Persistence
 
             string text = _textFileReadWriter.ReadAllText(_path);
             if (string.IsNullOrWhiteSpace(text))
-                throw new InvalidDataException($"'{_path}' is empty.");
-            return _serializer.Deserialize<Dictionary<string, JToken>>(text)
-                   ?? throw new InvalidDataException($"'{_path}' doesn't contain a JSON object.");
+                throw new UnreadableDataException($"'{_path}' is empty.");
+            Dictionary<string, JToken> data;
+            try
+            {
+                data = _serializer.Deserialize<Dictionary<string, JToken>>(text);
+            }
+            catch (JsonException e)
+            {
+                throw new UnreadableDataException($"'{_path}' isn't valid JSON.", e);
+            }
+            return data ?? throw new UnreadableDataException($"'{_path}' doesn't contain a JSON object.");
         }
 
         private void SaveData()

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -119,12 +118,12 @@ namespace Calluna.Persistence
         /// <see cref="ArchiveStoredData"/>) clears <see cref="LoadingFailed"/> again.
         /// </para>
         /// <para>
-        /// With <c>Reset Unreadable Data</c> (see <see cref="GameDataInstaller"/>) data that can't be read,
-        /// migrated or loaded is kept aside as <c>&lt;file&gt;.unreadable-&lt;time&gt;</c> and every
-        /// DataSaveLoader gets its default instead: the load succeeds, <see cref="DataWasReset"/> becomes
-        /// true and <see cref="GameDataLoadResult.RecoveredFrom"/> tells what failed. Not for read errors
-        /// that may pass (the file is locked, access denied), data of a newer game version or an invalid
-        /// setup - those still fail.
+        /// With <c>Reset Unreadable Data</c> (see <see cref="GameDataInstaller"/>) broken data - the
+        /// SaveLoader throws <see cref="UnreadableDataException"/>, or a migrator or DataSaveLoader throws -
+        /// is kept aside as <c>&lt;file&gt;.unreadable-&lt;time&gt;</c> and every DataSaveLoader gets its
+        /// default instead: the load succeeds, <see cref="DataWasReset"/> becomes true and
+        /// <see cref="GameDataLoadResult.RecoveredFrom"/> tells what failed. Other storage errors (e.g. a
+        /// locked file), data of a newer game version and an invalid setup still fail.
         /// </para>
         /// </summary>
         public void Load()
@@ -524,16 +523,19 @@ namespace Calluna.Persistence
             return true;
         }
 
-        // Read errors that may pass (locked file, denied access) don't make the data unreadable.
+        // Storage failures only when the SaveLoader says the data itself is broken - how the data is stored,
+        // and which errors may pass (a locked file, denied access), only the SaveLoader knows. Migration
+        // and DataSaveLoader failures are about the data's content.
         private bool CanResetUnreadableData(GameDataLoadResult result)
         {
             if (!_arguments.ResetUnreadableData)
                 return false;
-            if (result.Failure != GameDataLoadFailure.Storage
-                && result.Failure != GameDataLoadFailure.Migration
-                && result.Failure != GameDataLoadFailure.DataSaveLoader)
-                return false;
-            return !result.Exceptions.Any(e => e is IOException || e is UnauthorizedAccessException);
+            return result.Failure switch
+            {
+                GameDataLoadFailure.Storage => result.Exceptions.Any(e => e is UnreadableDataException),
+                GameDataLoadFailure.Migration or GameDataLoadFailure.DataSaveLoader => true,
+                _ => false,
+            };
         }
 
         private GameDataLoadResult ResetUnreadableData(GameDataLoadResult failed)
